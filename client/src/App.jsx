@@ -6,7 +6,8 @@ import ProviderLogin from './components/ProviderLogin';
 import { io } from 'socket.io-client';
 import { Shield } from 'lucide-react';
 
-const socket = io('http://localhost:5000');
+//const socket = io('http://localhost:5000');
+const socket = io('https://smart-sos-system.onrender.com');
 
 function App() {
   const [view, setView] = useState('user'); // 'user' or 'provider'
