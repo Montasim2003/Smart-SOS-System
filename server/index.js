@@ -15,6 +15,7 @@ const allowedOrigins = [
   'http://localhost:5173', 
   'http://localhost:3000', 
   'https://smart-sos-system-lf2rtqyfc.vercel.app' // Make sure this exactly matches your Vercel URL
+  'https://smart-sos-system.vercel.app'
 ];
 
 const io = new Server(server, {
