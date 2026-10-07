@@ -152,7 +152,8 @@ export default function UserApp({ profile, socket }) {
 
     try {
       // Use existing base API URL as instructed
-      const API_URL = 'http://localhost:5000';
+      //const API_URL = 'http://localhost:5000';
+      const API_URL = 'https://smart-sos-system.onrender.com';
       console.log('Sending update_sos via fetch:', currentSosId);
       await fetch(`${API_URL}/api/sos/update`, {
         method: 'POST',

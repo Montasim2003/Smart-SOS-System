@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { MapPin, Phone, MessageSquare, Clock, AlertCircle, User, Activity, LogOut } from 'lucide-react';
 
-const API_URL = 'http://localhost:5000';
+//const API_URL = 'http://localhost:5000';
+const API_URL = 'https://smart-sos-system.onrender.com';
 
 export default function ProviderDashboard({ serviceType, socket, onLogout }) {
   const [emergencies, setEmergencies] = useState([]);
