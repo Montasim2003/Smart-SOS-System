@@ -63,12 +63,18 @@ export default function ProviderDashboard({ serviceType, socket, onLogout }) {
     );
   };
 
+  const [activeTab, setActiveTab] = useState('pending');
+
   const filteredEmergencies = emergencies.filter(e => e.service === serviceType);
+  const pendingEmergencies = filteredEmergencies.filter(e => e.status !== 'Dispatched');
+  const acceptedEmergencies = filteredEmergencies.filter(e => e.status === 'Dispatched');
+  
+  const displayedEmergencies = activeTab === 'pending' ? pendingEmergencies : acceptedEmergencies;
 
   return (
     <div className="min-h-screen bg-slate-950 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-950 via-slate-950 to-slate-950 p-4 md:p-8 text-slate-200">
       <div className="max-w-7xl mx-auto">
-        <header className="flex flex-col md:flex-row items-center justify-between mb-10 bg-slate-900/50 backdrop-blur-xl p-6 rounded-3xl shadow-[0_0_30px_rgba(6,182,212,0.15)] border border-blue-500/30">
+        <header className="flex flex-col md:flex-row items-center justify-between mb-8 bg-slate-900/50 backdrop-blur-xl p-6 rounded-3xl shadow-[0_0_30px_rgba(6,182,212,0.15)] border border-blue-500/30">
           <div className="flex items-center gap-4">
             <div className="bg-blue-500/10 p-4 rounded-2xl text-blue-400 border border-blue-500/20 shadow-[0_0_15px_rgba(59,130,246,0.2)]">
               <AlertCircle size={32} />
@@ -89,17 +95,44 @@ export default function ProviderDashboard({ serviceType, socket, onLogout }) {
           </div>
         </header>
 
-        {filteredEmergencies.length === 0 ? (
+        <div className="flex flex-wrap gap-4 mb-8">
+          <button
+            onClick={() => setActiveTab('pending')}
+            className={`px-6 py-3 rounded-xl font-bold tracking-wider transition-all duration-300 border ${
+              activeTab === 'pending'
+                ? 'bg-blue-600/20 text-blue-400 border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.3)]'
+                : 'bg-slate-900/50 text-slate-500 border-slate-800 hover:bg-slate-800/50 hover:text-slate-400'
+            }`}
+          >
+            PENDING ALERTS ({pendingEmergencies.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('accepted')}
+            className={`px-6 py-3 rounded-xl font-bold tracking-wider transition-all duration-300 border ${
+              activeTab === 'accepted'
+                ? 'bg-emerald-600/20 text-emerald-400 border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.3)]'
+                : 'bg-slate-900/50 text-slate-500 border-slate-800 hover:bg-slate-800/50 hover:text-slate-400'
+            }`}
+          >
+            ACCEPTED / HISTORY ({acceptedEmergencies.length})
+          </button>
+        </div>
+
+        {displayedEmergencies.length === 0 ? (
           <div className="bg-slate-900/30 backdrop-blur-md rounded-3xl shadow-[0_0_30px_rgba(0,0,0,0.3)] border border-slate-800 p-16 flex flex-col items-center justify-center text-center">
             <div className="w-24 h-24 bg-slate-800/50 rounded-full flex items-center justify-center mb-6 border border-slate-700">
               <Clock size={40} className="text-slate-500 animate-pulse" />
             </div>
-            <h2 className="text-2xl font-bold text-slate-300 mb-2 tracking-wide">No Active Emergencies</h2>
-            <p className="text-slate-500 text-lg">Awaiting incoming signals for {serviceType}...</p>
+            <h2 className="text-2xl font-bold text-slate-300 mb-2 tracking-wide">
+              {activeTab === 'pending' ? 'No Active Emergencies' : 'No Accepted Emergencies'}
+            </h2>
+            <p className="text-slate-500 text-lg">
+              {activeTab === 'pending' ? `Awaiting incoming signals for ${serviceType}...` : 'History is empty...'}
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            {filteredEmergencies.map((sos) => (
+            {displayedEmergencies.map((sos) => (
               <div key={sos.id} className={`bg-slate-900/60 backdrop-blur-xl rounded-3xl shadow-[0_0_40px_rgba(59,130,246,0.15)] border ${sos.status === 'Dispatched' ? 'border-emerald-500/80 shadow-[0_0_30px_rgba(16,185,129,0.3)]' : 'border-blue-500/30'} overflow-hidden flex flex-col transform transition-all hover:-translate-y-1 hover:shadow-[0_0_50px_rgba(59,130,246,0.25)] group relative`}>
                 <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent pointer-events-none"></div>
                 <div className={`backdrop-blur-md p-5 flex justify-between items-center text-white border-b ${sos.status === 'Dispatched' ? 'bg-emerald-600/90 border-emerald-500/50' : 'bg-red-600/90 border-red-500/50'}`}>

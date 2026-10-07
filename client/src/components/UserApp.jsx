@@ -144,21 +144,23 @@ export default function UserApp({ profile, socket }) {
   const sendAdditionalDetails = async () => {
     if (!currentSosId) return;
     
-    let voiceBuffer = null;
-    let videoBuffer = null;
-    if (audioBlob) voiceBuffer = await audioBlob.arrayBuffer();
-    if (videoFile) videoBuffer = await videoFile.arrayBuffer();
+    const formData = new FormData();
+    formData.append('id', currentSosId);
+    if (textMessage) formData.append('message', textMessage);
+    if (audioBlob) formData.append('voice', audioBlob, 'voice.webm');
+    if (videoFile) formData.append('video', videoFile, videoFile.name);
 
-    const updateData = {
-      id: currentSosId,
-      message: textMessage,
-      voice: voiceBuffer,
-      video: videoBuffer,
-      videoExt: videoFile ? videoFile.name.split('.').pop() : 'webm'
-    };
-
-    console.log('Emitting update_sos over socket:', updateData.id);
-    socket.emit('update_sos', updateData);
+    try {
+      // Use existing base API URL as instructed
+      const API_URL = 'http://localhost:5000';
+      console.log('Sending update_sos via fetch:', currentSosId);
+      await fetch(`${API_URL}/api/sos/update`, {
+        method: 'POST',
+        body: formData,
+      });
+    } catch (error) {
+      console.error('Error updating SOS:', error);
+    }
 
     setTextMessage('');
     setAudioBlob(null);
