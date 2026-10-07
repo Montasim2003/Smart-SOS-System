@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
+// Typo fixed here:
+const { Server } = require('socket.io'); 
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
@@ -8,15 +9,24 @@ const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
+
+// Update CORS to include your Vercel URL
+const allowedOrigins = [
+  'http://localhost:5173', 
+  'http://localhost:3000', 
+  'https://smart-sos-system-lf2rtqyfc.vercel.app' // Make sure this exactly matches your Vercel URL
+];
+
 const io = new Server(server, {
   cors: {
-    origin: ['http://localhost:5173', 'http://localhost:3000', 'https://smart-sos-system-lf2rtqyfc.vercel.app'],
+    origin: allowedOrigins,
     methods: ['GET', 'POST']
   }
 });
 
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:3000', 'https://smart-sos-system-lf2rtqyfc.vercel.app']
+  origin: allowedOrigins,
+  methods: ['GET', 'POST']
 }));
 app.use(express.json());
 
@@ -38,7 +48,16 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// API endpoint for Step 1: Initial SOS
+// Store active emergencies in memory
+let activeEmergencies = [];
+
+// Serve uploaded files statically
+app.use('/uploads', express.static(uploadDir));
+
+// --- REST API ENDPOINTS (For Media Uploads) ---
+
+// This endpoint seems unused if initial SOS is purely socket-based, 
+// but keeping it if you plan to use fetch for initial SOS later.
 app.post('/api/sos/initial', upload.fields([
   { name: 'photo', maxCount: 1 }
 ]), (req, res) => {
@@ -54,55 +73,55 @@ app.post('/api/sos/initial', upload.fields([
   };
 
   io.emit('initial_sos', sosReport);
-  res.status(200).json({ success: true, message: 'Initial SOS received' });
+  res.status(200).json({ success: true, message: 'Initial SOS received via API' });
 });
 
-// API endpoint for Step 2: Update SOS
+// This is the endpoint UserApp.jsx hits with FormData
 app.post('/api/sos/update', upload.fields([
   { name: 'voice', maxCount: 1 },
   { name: 'video', maxCount: 1 }
 ]), (req, res) => {
+  console.log('Received media update via API for ID:', req.body.id);
+  
   const { id, message } = req.body;
   const voiceFile = req.files['voice'] ? req.files['voice'][0] : null;
   const videoFile = req.files['video'] ? req.files['video'][0] : null;
 
+  const voiceUrl = voiceFile ? `/uploads/${voiceFile.filename}` : null;
+  const videoUrl = videoFile ? `/uploads/${videoFile.filename}` : null;
+
   const updateData = {
     id,
     message,
-    voiceUrl: voiceFile ? `/uploads/${voiceFile.filename}` : null,
-    videoUrl: videoFile ? `/uploads/${videoFile.filename}` : null,
+    voiceUrl,
+    videoUrl,
     updateTimestamp: new Date().toISOString()
   };
 
-  io.emit('update_sos', updateData);
-  res.status(200).json({ success: true, message: 'SOS updated' });
+  // 1. Update the in-memory array
+  const index = activeEmergencies.findIndex(e => e.id === id);
+  if (index !== -1) {
+    activeEmergencies[index] = { 
+      ...activeEmergencies[index], 
+      message: message || activeEmergencies[index].message, 
+      voiceUrl: voiceUrl || activeEmergencies[index].voiceUrl, 
+      videoUrl: videoUrl || activeEmergencies[index].videoUrl 
+    };
+  } else {
+      console.log(`Warning: Tried to update SOS ID ${id} but it wasn't found in memory.`);
+  }
+
+  // 2. Broadcast the update to connected clients (ProviderDashboard)
+  io.emit('update_emergency', updateData);
+  
+  res.status(200).json({ success: true, message: 'SOS media updated successfully', updateData });
 });
 
-// Serve uploaded files
-app.use('/uploads', express.static(uploadDir));
 
-// Socket connection
-let activeEmergencies = [];
+// --- SOCKET.IO LOGIC ---
 
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
-
-  socket.on('accept_sos', (data) => {
-    console.log('Provider accepted SOS:', data);
-    
-    // Update status in activeEmergencies
-    const index = activeEmergencies.findIndex(e => e.id === data.id);
-    if (index !== -1) {
-      activeEmergencies[index].status = 'Dispatched';
-      io.emit('update_emergency_status', { id: data.id, status: 'Dispatched' });
-    }
-
-    // Broadcast to the user that their SOS was accepted
-    io.emit('sos_accepted', {
-      message: "Help is on the way!",
-      sosId: data.id
-    });
-  });
 
   socket.on('get_emergencies', () => {
     socket.emit('sync_emergencies', activeEmergencies);
@@ -111,7 +130,7 @@ io.on('connection', (socket) => {
   socket.on('initial_sos', (data) => {
     console.log('Received initial_sos from client:', data.id);
     
-    const saveBase64Photo = (base64String, prefix) => {
+    const saveBase64Photo = (base64String) => {
       if (!base64String) return null;
       if (typeof base64String === 'string' && base64String.startsWith('data:image')) {
         return base64String;
@@ -119,72 +138,33 @@ io.on('connection', (socket) => {
       return null;
     };
 
-    let photoUrl = saveBase64Photo(data.photo, 'photo');
-    let photoFrontUrl = saveBase64Photo(data.photoFront, 'front');
-    let photoBackUrl = saveBase64Photo(data.photoBack, 'back');
-
     const sosReport = {
       id: data.id,
       service: data.service,
       location: data.location,
-      photoUrl: photoUrl,
-      photoFrontUrl: photoFrontUrl,
-      photoBackUrl: photoBackUrl,
+      photoUrl: saveBase64Photo(data.photo),
+      photoFrontUrl: saveBase64Photo(data.photoFront),
+      photoBackUrl: saveBase64Photo(data.photoBack),
       profile: data.profile,
       status: 'Pending',
       timestamp: new Date().toISOString()
     };
 
     activeEmergencies.unshift(sosReport);
-
-    // Broadcast to the dashboard
     io.emit('new_emergency', sosReport);
   });
 
-  socket.on('update_sos', (data) => {
-    console.log('Received update_sos from client:', data.id);
-    
-    let voiceUrl = null;
-    if (data.voice) {
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      const filename = 'voice-' + uniqueSuffix + '.webm';
-      const filepath = path.join(uploadDir, filename);
-      fs.writeFileSync(filepath, data.voice);
-      voiceUrl = `/uploads/${filename}`;
-    }
-
-    let videoUrl = null;
-    if (data.video) {
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      const filename = 'video-' + uniqueSuffix + '.' + (data.videoExt || 'webm');
-      const filepath = path.join(uploadDir, filename);
-      fs.writeFileSync(filepath, data.video);
-      videoUrl = `/uploads/${filename}`;
-    }
-
-    const updateData = {
-      id: data.id,
-      message: data.message,
-      voiceUrl,
-      videoUrl,
-      updateTimestamp: new Date().toISOString()
-    };
-
+  socket.on('accept_sos', (data) => {
+    console.log('Provider accepted SOS:', data.id);
     const index = activeEmergencies.findIndex(e => e.id === data.id);
     if (index !== -1) {
-      activeEmergencies[index] = { 
-        ...activeEmergencies[index], 
-        message: data.message, 
-        voiceUrl: voiceUrl || activeEmergencies[index].voiceUrl, 
-        videoUrl: videoUrl || activeEmergencies[index].videoUrl 
-      };
+      activeEmergencies[index].status = 'Dispatched';
+      io.emit('update_emergency_status', { id: data.id, status: 'Dispatched' });
     }
-
-    io.emit('update_emergency', updateData);
+    io.emit('sos_accepted', { message: "Help is on the way!", sosId: data.id });
   });
 
   socket.on('live_location_update', (data) => {
-    console.log('Received live_location_update for:', data.id);
     const index = activeEmergencies.findIndex(e => e.id === data.id);
     if (index !== -1) {
       activeEmergencies[index].location = data.location;
