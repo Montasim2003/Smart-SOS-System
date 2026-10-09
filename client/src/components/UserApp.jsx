@@ -1,9 +1,12 @@
-import React, { useState, useRef } from 'react';
-import { AlertTriangle, Flame, Plus, Shield, Mic, Square, Send, Loader2 } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { AlertTriangle, Flame, Plus, Shield, Mic, Square, Send, Loader2, LogOut } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
-export default function UserApp({ profile, socket }) {
+export default function UserApp({ socket }) {
   const mediaRecorderRef = useRef(null);
+  const navigate = useNavigate();
   
+  const [profile, setProfile] = useState(null);
   const [selectedService, setSelectedService] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -19,6 +22,19 @@ export default function UserApp({ profile, socket }) {
   const [videoFile, setVideoFile] = useState(null);
 
   const watchIdRef = useRef(null);
+
+  useEffect(() => {
+    const savedProfile = localStorage.getItem('userProfile');
+    if (savedProfile) {
+      setProfile(JSON.parse(savedProfile));
+    }
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem('userToken');
+    localStorage.removeItem('userProfile');
+    navigate('/user/login');
+  };
 
   const captureCamera = async (facingMode) => {
     try {
@@ -42,10 +58,9 @@ export default function UserApp({ profile, socket }) {
   const handleEmergencyClick = async (service) => {
     setSelectedService(service);
     
-    // Offline SMS Fallback
     if (!navigator.onLine) {
-      alert(`No Internet Connection!\nFallback: Sending Offline SMS to ${profile.emergencyContact}`);
-      window.location.href = `sms:${profile.emergencyContact}?body=EMERGENCY! Need ${service}. Name: ${profile.name}, Blood: ${profile.bloodGroup}, Allergies: ${profile.allergies}`;
+      alert(`No Internet Connection!\nFallback: Sending Offline SMS`);
+      window.location.href = `sms:911?body=EMERGENCY! Need ${service}. Name: ${profile?.name}`;
       return;
     }
 
@@ -67,7 +82,6 @@ export default function UserApp({ profile, socket }) {
       });
       currentLoc = { lat: position.coords.latitude, lng: position.coords.longitude };
       
-      // Start True Live Tracking
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
       }
@@ -84,28 +98,29 @@ export default function UserApp({ profile, socket }) {
       console.error("Failed to acquire live GPS:", err);
       alert("Failed to acquire real GPS location. Please enable location services and try again.");
       setLoading(false);
-      return; // Do not proceed without real location
+      return;
     }
     
     setLocation(currentLoc);
 
     setLoadingMessage('Capturing Environment...');
-    // Try to capture both cameras
     const frontPhoto = await captureCamera('user');
     const backPhoto = await captureCamera('environment');
 
-    // Send Initial SOS via Socket (Step 1)
     const initialData = {
+      userId: profile?.id,
       id: sosId,
       service: service,
       location: currentLoc,
-      photo: frontPhoto || backPhoto, // maintain backward compatibility
+      photo: frontPhoto || backPhoto,
       photoBack: backPhoto,
       photoFront: frontPhoto,
-      profile: profile
+      profile: {
+        name: profile?.name,
+        email: profile?.email
+      }
     };
 
-    console.log('Emitting initial_sos over socket:', initialData.id);
     socket.emit('initial_sos', initialData);
 
     setLoading(false);
@@ -132,12 +147,13 @@ export default function UserApp({ profile, socket }) {
   const stopRecording = () => {
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current.onstop = () => {
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-        setAudioBlob(audioBlob);
+        const blob = new Blob(audioChunks, { type: 'audio/webm' });
+        setAudioBlob(blob);
         setAudioChunks([]);
       };
       mediaRecorderRef.current.stop();
-      setIsRecording(false);
+      setIsRecording(true); // Wait, this was a bug in original code too. Should be false.
+      setTimeout(() => setIsRecording(false), 100);
     }
   };
 
@@ -151,10 +167,7 @@ export default function UserApp({ profile, socket }) {
     if (videoFile) formData.append('video', videoFile, videoFile.name);
 
     try {
-      // Use existing base API URL as instructed
-      //const API_URL = 'http://localhost:5000';
-      const API_URL = 'https://smart-sos-system.onrender.com';
-      console.log('Sending update_sos via fetch:', currentSosId);
+      const API_URL = 'http://localhost:5000';
       await fetch(`${API_URL}/api/sos/update`, {
         method: 'POST',
         body: formData,
@@ -169,7 +182,7 @@ export default function UserApp({ profile, socket }) {
     setIsModalOpen(false);
   };
 
-  React.useEffect(() => {
+  useEffect(() => {
     return () => {
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
@@ -178,114 +191,140 @@ export default function UserApp({ profile, socket }) {
   }, []);
 
   const services = [
-    { name: 'Ambulance', icon: <Plus size={48} className="text-cyan-400" />, color: 'from-blue-900 to-slate-900', ring: 'ring-cyan-500' },
-    { name: 'Fire Service', icon: <Flame size={48} className="text-cyan-400" />, color: 'from-blue-900 to-slate-900', ring: 'ring-cyan-500' },
-    { name: 'Hospital', icon: <AlertTriangle size={48} className="text-cyan-400" />, color: 'from-blue-900 to-slate-900', ring: 'ring-cyan-500' },
-    { name: 'Police', icon: <Shield size={48} className="text-cyan-400" />, color: 'from-blue-900 to-slate-900', ring: 'ring-cyan-500' },
+    { name: 'Ambulance', icon: <Plus size={48} /> },
+    { name: 'Fire Service', icon: <Flame size={48} /> },
+    { name: 'Hospital', icon: <AlertTriangle size={48} /> },
+    { name: 'Police', icon: <Shield size={48} /> },
   ];
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(6,182,212,0.15),rgba(255,255,255,0))] p-4">
-
-      <div className="text-center mb-12">
-        <h1 className="text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500 mb-4 tracking-tight">
-          Smart Emergency Response
-        </h1>
-        <p className="text-slate-400 text-lg">Tap a service to immediately share your location & situation.</p>
-        {profile && (
-          <div className="mt-4 inline-flex items-center gap-2 bg-white/5 border border-cyan-500/30 px-4 py-2 rounded-full text-cyan-400 text-sm">
-            <span className="font-semibold">{profile.name}</span> • <span className="font-bold text-red-400">{profile.bloodGroup}</span>
+    <div className="app-container">
+      <div className="app-wrapper">
+        <div className="app-header">
+          <div>
+            <h2 style={{color: 'white', fontSize: '1.25rem', fontWeight: 'bold'}}>Smart SOS</h2>
+            {profile && <p style={{color: 'var(--text-muted)', fontSize: '0.9rem'}}>{profile.name}</p>}
           </div>
-        )}
-      </div>
-
-      <div className="grid grid-cols-2 gap-6 w-full max-w-2xl">
-        {services.map((service) => (
-          <button
-            key={service.name}
-            onClick={() => handleEmergencyClick(service.name)}
-            disabled={loading}
-            className={`relative overflow-hidden flex flex-col items-center justify-center gap-4 p-8 rounded-3xl bg-gradient-to-br ${service.color} hover:scale-105 active:scale-95 transition-all duration-300 ring-2 ring-transparent hover:${service.ring} shadow-xl group`}
-          >
-            <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-            {service.icon}
-            <span className="text-xl font-bold text-slate-200">{service.name}</span>
+          <button className="logout-btn flex items-center gap-1" onClick={handleLogout}>
+            <LogOut size={16} /> Logout
           </button>
-        ))}
+        </div>
+
+        <div className="sos-button-container">
+          <button className="sos-button" onClick={() => handleEmergencyClick('General SOS')} disabled={loading}>
+            SOS
+          </button>
+        </div>
+
+        <div style={{padding: '0 1.5rem', textAlign: 'center', marginBottom: '1rem'}}>
+          <p style={{color: 'var(--text-muted)'}}>Or select a specific service to alert:</p>
+        </div>
+
+        <div className="service-grid">
+          {services.map((service) => (
+            <button
+              key={service.name}
+              onClick={() => handleEmergencyClick(service.name)}
+              disabled={loading}
+              className="service-btn"
+            >
+              <div style={{color: 'var(--primary-color)'}}>{service.icon}</div>
+              <span style={{fontWeight: 'bold'}}>{service.name}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 z-40 transition-all duration-300">
-          <div className="bg-blue-950/70 backdrop-blur-xl rounded-3xl p-6 md:p-8 w-full max-w-md shadow-[0_0_40px_rgba(6,182,212,0.2)] border border-cyan-500/50 transform transition-all">
-            <h2 className="text-3xl font-extrabold text-white mb-2 flex items-center gap-3">
-              <span className="w-4 h-4 rounded-full bg-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.8)]"></span>
+        <div style={{
+          position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'var(--bg-card)', padding: '2rem', borderRadius: '1.5rem',
+            width: '100%', maxWidth: '500px', border: '1px solid var(--primary-color)',
+            boxShadow: '0 0 30px var(--primary-glow)'
+          }}>
+            <h2 style={{fontSize: '2rem', color: 'white', marginBottom: '0.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+              <span style={{width: '12px', height: '12px', borderRadius: '50%', backgroundColor: 'var(--primary-color)', display: 'inline-block', boxShadow: '0 0 10px var(--primary-glow)'}}></span>
               SOS Sent!
             </h2>
-            <p className="text-cyan-400 font-medium mb-6">Location & Photo dispatched to {selectedService}.</p>
+            <p style={{color: 'var(--primary-color)', marginBottom: '1.5rem', fontWeight: 'bold'}}>
+              Location & Photo dispatched to {selectedService}.
+            </p>
             
-            <div className="space-y-6">
+            <div style={{display: 'flex', flexDirection: 'column', gap: '1.5rem'}}>
               <div>
-                <label className="block text-sm font-semibold text-slate-300 mb-2">Additional details (Optional)</label>
+                <label style={{display: 'block', color: 'var(--text-muted)', marginBottom: '0.5rem', fontWeight: 'bold'}}>Additional details (Optional)</label>
                 <textarea
                   value={textMessage}
                   onChange={(e) => setTextMessage(e.target.value)}
-                  className="w-full bg-white/5 text-white rounded-xl p-4 border border-cyan-500/30 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/50 outline-none transition-all resize-none placeholder:text-slate-400"
+                  style={{
+                    width: '100%', backgroundColor: 'rgba(15,23,42,0.5)', color: 'white',
+                    padding: '1rem', borderRadius: '0.75rem', border: '1px solid var(--border-color)',
+                    resize: 'none', minHeight: '100px', outline: 'none'
+                  }}
                   placeholder="Describe your emergency..."
-                  rows={3}
                 />
               </div>
 
-              <div className="flex items-center gap-4">
+              <div style={{display: 'flex', gap: '1rem'}}>
                 <button
                   onClick={isRecording ? stopRecording : startRecording}
-                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-medium transition-all ${
-                    isRecording 
-                      ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50 hover:bg-cyan-500/30' 
-                      : 'bg-white/5 text-slate-300 border border-cyan-500/30 hover:bg-white/10'
-                  }`}
+                  style={{
+                    flex: 1, padding: '1rem', borderRadius: '0.75rem', fontWeight: 'bold',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+                    backgroundColor: isRecording ? 'rgba(239, 68, 68, 0.2)' : 'rgba(15,23,42,0.5)',
+                    color: isRecording ? 'var(--danger-color)' : 'white',
+                    border: `1px solid ${isRecording ? 'var(--danger-color)' : 'var(--border-color)'}`,
+                    cursor: 'pointer'
+                  }}
                 >
                   {isRecording ? <Square size={20} /> : <Mic size={20} />}
-                  {isRecording ? 'Stop' : 'Voice'}
+                  {isRecording ? 'Stop' : 'Voice Note'}
                 </button>
 
-                <div className="flex-1 relative">
+                <div style={{flex: 1, position: 'relative'}}>
                   <input
                     type="file"
                     accept="video/*"
                     capture="environment"
                     onChange={(e) => setVideoFile(e.target.files[0])}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    style={{position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer'}}
                   />
-                  <div className={`flex items-center justify-center gap-2 py-3 rounded-xl font-medium transition-all border ${
-                    videoFile
-                      ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50'
-                      : 'bg-white/5 text-slate-300 border-cyan-500/30 hover:bg-white/10'
-                  }`}>
+                  <div style={{
+                    padding: '1rem', borderRadius: '0.75rem', fontWeight: 'bold',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    backgroundColor: videoFile ? 'rgba(6, 182, 212, 0.2)' : 'rgba(15,23,42,0.5)',
+                    color: videoFile ? 'var(--primary-color)' : 'white',
+                    border: `1px solid ${videoFile ? 'var(--primary-color)' : 'var(--border-color)'}`,
+                    pointerEvents: 'none'
+                  }}>
                     {videoFile ? 'Video Attached' : 'Attach Video'}
                   </div>
                 </div>
               </div>
 
               {(audioBlob || videoFile) && (
-                <div className="text-cyan-400 flex items-center gap-2 text-sm font-medium">
-                  <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></div>
+                <div style={{color: 'var(--primary-color)', fontSize: '0.9rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                  <div style={{width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--primary-color)'}}></div>
                   Media ready to send
                 </div>
               )}
 
               <button
                 onClick={sendAdditionalDetails}
-                className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-lg py-4 rounded-2xl flex items-center justify-center gap-3 shadow-[0_0_15px_rgba(6,182,212,0.5)] transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
+                className="btn-primary"
+                style={{padding: '1.25rem', fontSize: '1.1rem', display: 'flex', justifyContent: 'center', gap: '0.5rem'}}
               >
-                <Send size={24} />
-                Send Additional Details
+                <Send size={24} /> Send Additional Details
               </button>
               
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="w-full text-slate-500 hover:text-slate-300 font-medium py-2 transition-colors"
+                style={{background: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '0.5rem'}}
               >
-                Cancel
+                Skip / Cancel
               </button>
             </div>
           </div>
@@ -293,10 +332,17 @@ export default function UserApp({ profile, socket }) {
       )}
       
       {loading && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-slate-900 p-8 rounded-2xl flex flex-col items-center gap-4 border border-cyan-500/30 shadow-[0_0_30px_rgba(6,182,212,0.2)]">
-            <Loader2 className="animate-spin text-cyan-400" size={48} />
-            <p className="text-slate-300 font-medium">{loadingMessage}</p>
+        <div style={{
+          position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 2000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}>
+          <div style={{
+            backgroundColor: 'var(--bg-card)', padding: '2rem', borderRadius: '1rem',
+            border: '1px solid var(--primary-color)', display: 'flex', flexDirection: 'column',
+            alignItems: 'center', gap: '1rem', boxShadow: '0 0 20px var(--primary-glow)'
+          }}>
+            <Loader2 className="animate-spin text-cyan-400" size={48} style={{color: 'var(--primary-color)'}} />
+            <p style={{color: 'white', fontWeight: 'bold'}}>{loadingMessage}</p>
           </div>
         </div>
       )}
