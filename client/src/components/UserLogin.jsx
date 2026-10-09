@@ -13,8 +13,13 @@ export default function UserLogin() {
     setError('');
     const endpoint = isLogin ? '/api/auth/user/login' : '/api/auth/user/register';
     
+    // ডাইনামিক API_URL লজিক
+    const API_URL = window.location.hostname === 'localhost' 
+      ? 'http://localhost:5000' 
+      : 'https://smart-sos-system.onrender.com';
+
     try {
-      const response = await fetch(`http://localhost:5000${endpoint}`, {
+      const response = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)
