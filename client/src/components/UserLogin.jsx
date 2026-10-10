@@ -19,7 +19,6 @@ export default function UserLogin() {
     setError('');
     const endpoint = isLogin ? '/api/auth/user/login' : '/api/auth/user/register';
     
-    // ডাইনামিক API_URL লজিক
     const API_URL = window.location.hostname === 'localhost' 
       ? 'http://localhost:5000' 
       : 'https://smart-sos-system.onrender.com';

@@ -11,7 +11,6 @@ import './App.css';
 
 const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:5000' : 'https://smart-sos-system.onrender.com';
 
-// CORS সমস্যা এড়াতে এবং একাধিক ডিভাইস সাপোর্ট করতে withCredentials যোগ করা হয়েছে
 const socket = io(API_URL, {
   withCredentials: true
 });

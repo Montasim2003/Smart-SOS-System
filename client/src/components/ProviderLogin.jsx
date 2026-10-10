@@ -14,7 +14,6 @@ export default function ProviderLogin() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  // API URL Dynamic Config
   const API_URL = window.location.hostname === 'localhost' 
     ? 'http://localhost:5000' 
     : 'https://smart-sos-system.onrender.com';

@@ -82,7 +82,13 @@ export default function ProviderDashboard({ socket }) {
       socket.off('update_emergency_status');
       socket.off('update_emergency_location');
       socket.off('sos_deleted');
-      if (trackerRef.current) clearInterval(trackerRef.current);
+      if (trackerRef.current) {
+        if (navigator.geolocation) {
+          navigator.geolocation.clearWatch(trackerRef.current);
+        } else {
+          clearInterval(trackerRef.current);
+        }
+      }
     };
   }, [socket, serviceType]);
 
@@ -92,17 +98,23 @@ export default function ProviderDashboard({ socket }) {
       prev.map(e => e.id === sosId ? { ...e, status: 'Dispatched' } : e)
     );
 
-    // Simulate provider location moving towards victim
-    const sos = emergencies.find(e => e.id === sosId);
-    if (sos && sos.location) {
-      let lat = sos.location.lat + 0.05;
-      let lng = sos.location.lng + 0.05;
-      trackerRef.current = setInterval(() => {
-        lat -= 0.005;
-        lng -= 0.005;
-        socket.emit('provider_location_update', { id: sosId, location: { lat, lng } });
-        if (Math.abs(lat - sos.location.lat) < 0.006) clearInterval(trackerRef.current);
-      }, 3000);
+    if (navigator.geolocation) {
+      trackerRef.current = navigator.geolocation.watchPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          socket.emit('provider_location_update', { 
+            id: sosId, 
+            location: { lat: latitude, lng: longitude } 
+          });
+        },
+        (error) => {
+          console.error("Error getting location:", error);
+          alert("Please enable GPS/Location to share live tracking with the victim.");
+        },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
+      );
+    } else {
+      alert("Geolocation is not supported by this browser.");
     }
   };
 
@@ -184,7 +196,7 @@ export default function ProviderDashboard({ socket }) {
                     <span className={`badge ${sos.status === 'Pending' ? 'pending' : 'dispatched'}`}>{sos.status}</span>
                   </div>
                   <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-                    {new Date(sos.timestamp).toLocaleTimeString()}
+                    {new Date(sos.timestamp || sos.createdAt || Date.now()).toLocaleTimeString()}
                   </div>
                 </div>
               ))
@@ -194,9 +206,8 @@ export default function ProviderDashboard({ socket }) {
 
         <div className="emergency-detail">
           {displayedEmergencies.length > 0 ? (
-            // Just display the first one for simplicity, or we could add selection state. Let's make it the top one.
             (() => {
-              const sos = displayedEmergencies[0]; // Normally you'd have a selected item state
+              const sos = displayedEmergencies[0];
               return (
                 <div>
                   <div className="detail-header">
@@ -204,7 +215,7 @@ export default function ProviderDashboard({ socket }) {
                       <h2 style={{ fontSize: '2rem', color: sos.status === 'Pending' ? 'var(--danger-color)' : 'var(--success-color)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <AlertCircle /> SOS ALERT {sos.status === 'Dispatched' && '(HANDLED)'}
                       </h2>
-                      <span style={{ color: 'var(--text-muted)' }}>{new Date(sos.timestamp).toLocaleString()}</span>
+                      <span style={{ color: 'var(--text-muted)' }}>{new Date(sos.timestamp || sos.createdAt || Date.now()).toLocaleString()}</span>
                     </div>
                     <div style={{ display: 'flex', gap: '1rem' }}>
                       {sos.status === 'Pending' && (
@@ -219,7 +230,6 @@ export default function ProviderDashboard({ socket }) {
                   </div>
 
                   <div className="info-grid">
-                    {/* Victim Info */}
                     <div className="info-card">
                       <h3><User size={20} /> Victim Details</h3>
                       {sos.profile ? (
@@ -235,7 +245,6 @@ export default function ProviderDashboard({ socket }) {
                       )}
                     </div>
 
-                    {/* Location Info */}
                     <div className="info-card">
                       <h3><MapPin size={20} /> Live Coordinates</h3>
                       {sos.location && sos.location.lat ? (
@@ -258,7 +267,6 @@ export default function ProviderDashboard({ socket }) {
                     </div>
                   </div>
 
-                  {/* Media Info */}
                   <div style={{ marginTop: '2rem' }}>
                     <h3 style={{ color: 'white', marginBottom: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>Media Evidence</h3>
 

@@ -8,7 +8,6 @@ const userSchema = new mongoose.Schema({
   medicalNotes: { type: String, default: '' },
 }, { timestamps: true });
 
-// এখান থেকে next রিমুভ করা হয়েছে
 userSchema.pre('save', async function() {
   if (!this.isModified('password')) return;
   this.password = await bcrypt.hash(this.password, 10);

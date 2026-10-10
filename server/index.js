@@ -25,12 +25,11 @@ const allowedOrigins = [
   'http://localhost:5173', 
   'http://localhost:3000',
   'http://localhost:5174',
-  'http://localhost:5175', // Extra safety er jonno
+  'http://localhost:5175',
   'https://smart-sos-system-lf2rtqyfc.vercel.app',
   'https://smart-sos-system.vercel.app'
 ];
 
-// Ekhane credentials: true add kora hoyeche jeno cookie/token thik moto kaj kore
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
@@ -39,7 +38,6 @@ const io = new Server(server, {
   }
 });
 
-// Express er CORS e o credentials: true add kora hoyeche
 app.use(cors({
   origin: allowedOrigins,
   methods: ['GET', 'POST'],
@@ -47,7 +45,6 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '50mb' }));
 
-// Set up multer for file uploads
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
@@ -65,10 +62,8 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// Serve uploaded files statically
 app.use('/uploads', express.static(uploadDir));
 
-// --- AUTHENTICATION ROUTES ---
 const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_jwt_key';
 
 // User Auth
@@ -104,7 +99,6 @@ app.post('/api/auth/user/login', async (req, res) => {
   }
 });
 
-// Update Profile
 app.post('/api/auth/user/profile', async (req, res) => {
   try {
     const { userId, bloodGroup, medicalNotes } = req.body;
@@ -154,9 +148,6 @@ app.post('/api/auth/provider/login', async (req, res) => {
   }
 });
 
-
-// --- REST API ENDPOINTS (For Media Uploads) ---
-
 app.post('/api/sos/update', upload.fields([
   { name: 'voice', maxCount: 1 },
   { name: 'video', maxCount: 1 }
@@ -195,9 +186,6 @@ app.post('/api/sos/update', upload.fields([
     res.status(500).json({ success: false, message: error.message });
   }
 });
-
-
-// --- SOCKET.IO LOGIC ---
 
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
@@ -280,9 +268,16 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('provider_location_update', (data) => {
-    // Forward provider's live location to the specific SOS room or globally for the user to track
-    io.emit('rescue_team_location', { id: data.id, location: data.location });
+  socket.on('provider_location_update', async (data) => {
+    try {
+      await Emergency.findOneAndUpdate(
+        { emergencyId: data.id }, 
+        { providerLocation: data.location }
+      );
+      io.emit('rescue_team_location', { id: data.id, location: data.location });
+    } catch (err) {
+      console.error('Error updating provider live location:', err);
+    }
   });
 
   socket.on('disconnect', () => {

@@ -9,6 +9,10 @@ const emergencySchema = new mongoose.Schema({
     lng: { type: Number },
     accuracy: { type: Number }
   },
+  providerLocation: {
+    lat: { type: Number },
+    lng: { type: Number }
+  },
   photoUrl: { type: String },
   photoFrontUrl: { type: String },
   photoBackUrl: { type: String },
@@ -19,7 +23,7 @@ const emergencySchema = new mongoose.Schema({
     medicalNotes: { type: String },
     contacts: { type: String },
   },
-  status: { type: String, default: 'Pending' }, // Pending, Dispatched, Resolved
+  status: { type: String, default: 'Pending' },
   message: { type: String },
   voiceUrl: { type: String },
   videoUrl: { type: String },

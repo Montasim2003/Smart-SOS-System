@@ -1,6 +1,23 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { AlertTriangle, Flame, Plus, Shield, Mic, Square, Send, Loader2, LogOut, User as UserIcon, Activity, MapPin } from 'lucide-react';
+import { AlertTriangle, Flame, Plus, Shield, Mic, Square, Send, Loader2, LogOut, User as UserIcon, Activity, MapPin, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
+
+// ম্যাপের আইকন ফিক্স করার জন্য
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+});
+
+const rescueIcon = new L.Icon({
+  iconUrl: 'https://cdn-icons-png.flaticon.com/512/883/883407.png', // Rescue vehicle icon
+  iconSize: [40, 40],
+  iconAnchor: [20, 20],
+});
 
 export default function UserApp({ socket }) {
   const mediaRecorderRef = useRef(null);
@@ -24,8 +41,10 @@ export default function UserApp({ socket }) {
   const [audioBlob, setAudioBlob] = useState(null);
   const [videoFile, setVideoFile] = useState(null);
 
+  const [showMap, setShowMap] = useState(false); // লাইভ ম্যাপ দেখানোর স্টেট
+
   const watchIdRef = useRef(null);
-  const audioChunksRef = useRef([]); // অডিও চাঙ্ক সেভ করার জন্য রিফ
+  const audioChunksRef = useRef([]);
 
   useEffect(() => {
     const savedProfile = localStorage.getItem('userProfile');
@@ -111,7 +130,7 @@ export default function UserApp({ socket }) {
       const position = await new Promise((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, { 
           enableHighAccuracy: true, 
-          timeout: 10000, // ডেমোর জন্য দ্রুত রেসপন্স
+          timeout: 10000,
           maximumAge: 0 
         });
       });
@@ -132,7 +151,6 @@ export default function UserApp({ socket }) {
     } catch (err) {
       console.warn("Failed to acquire live GPS:", err);
       alert("GPS Signal Weak/Unavailable. Sending SOS without live location...");
-      // আমরা return করছি না, যাতে লোকেশন ছাড়াই SOS চলে যায়!
     }
     
     setLocation(currentLoc);
@@ -145,7 +163,7 @@ export default function UserApp({ socket }) {
       userId: profile?.id,
       id: sosId,
       service: service,
-      location: currentLoc, // এটি null হলেও ব্যাকএন্ড রিসিভ করবে
+      location: currentLoc,
       photo: frontPhoto || backPhoto,
       photoBack: backPhoto,
       photoFront: frontPhoto,
@@ -193,7 +211,6 @@ export default function UserApp({ socket }) {
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
-      // স্ট্রিম বন্ধ করে দেওয়া হচ্ছে যেন ব্রাউজারে মাইক আইকন থেকে যায় না
       mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
     }
   };
@@ -393,7 +410,6 @@ export default function UserApp({ socket }) {
         </div>
       )}
 
-      {/* Profile Modal */}
       {isProfileModalOpen && (
         <div style={{
           position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)',
@@ -431,23 +447,64 @@ export default function UserApp({ socket }) {
         </div>
       )}
 
-      {/* Tracker UI */}
+      {/* Tracker UI - Click to open Live Map */}
       {rescueTeamLocation && currentSosId && (
-        <div style={{
-          position: 'fixed', bottom: '2rem', left: '50%', transform: 'translateX(-50%)',
-          backgroundColor: 'var(--bg-card)', padding: '1rem 1.5rem', borderRadius: '1rem',
-          border: '1px solid var(--success-color)', boxShadow: '0 0 20px rgba(16,185,129,0.3)',
-          display: 'flex', alignItems: 'center', gap: '1rem', zIndex: 500, width: '90%', maxWidth: '400px'
-        }}>
+        <div 
+          onClick={() => setShowMap(true)}
+          style={{
+            position: 'fixed', bottom: '2rem', left: '50%', transform: 'translateX(-50%)',
+            backgroundColor: 'var(--bg-card)', padding: '1rem 1.5rem', borderRadius: '1rem',
+            border: '1px solid var(--success-color)', boxShadow: '0 0 20px rgba(16,185,129,0.5)',
+            display: 'flex', alignItems: 'center', gap: '1rem', zIndex: 500, width: '90%', maxWidth: '400px',
+            cursor: 'pointer'
+          }}
+        >
           <div style={{backgroundColor: 'rgba(16,185,129,0.2)', padding: '0.8rem', borderRadius: '50%', color: 'var(--success-color)'}}>
             <Activity className="animate-pulse" size={24} />
           </div>
-          <div>
+          <div style={{ flex: 1 }}>
             <div style={{color: 'var(--success-color)', fontWeight: 'bold', fontSize: '1.1rem'}}>Rescue Team En Route</div>
-            <div style={{color: 'var(--text-muted)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.3rem'}}>
-              <MapPin size={12} />
-              Lat: {rescueTeamLocation.lat.toFixed(4)}, Lng: {rescueTeamLocation.lng.toFixed(4)}
-            </div>
+            <div style={{color: 'var(--text-muted)', fontSize: '0.8rem'}}>Click here to track live location</div>
+          </div>
+        </div>
+      )}
+
+      {/* Live Map Modal */}
+      {showMap && rescueTeamLocation && location && (
+        <div style={{
+          position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.9)', zIndex: 3000,
+          display: 'flex', flexDirection: 'column'
+        }}>
+          <div style={{ padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'var(--bg-card)', borderBottom: '1px solid var(--success-color)' }}>
+            <h3 style={{ color: 'var(--success-color)', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Activity className="animate-pulse" size={20} /> Live Tracking
+            </h3>
+            <button onClick={() => setShowMap(false)} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer' }}>
+              <X size={24} />
+            </button>
+          </div>
+          
+          <div style={{ flex: 1, position: 'relative' }}>
+            <MapContainer 
+              center={[location.lat, location.lng]} 
+              zoom={14} 
+              style={{ height: '100%', width: '100%' }}
+            >
+              <TileLayer
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                attribution='&copy; OpenStreetMap contributors'
+              />
+              
+              {/* ইউজারের লোকেশন */}
+              <Marker position={[location.lat, location.lng]}>
+                <Popup>Your Location</Popup>
+              </Marker>
+              
+              {/* রেসকিউ টিমের লাইভ লোকেশন */}
+              <Marker position={[rescueTeamLocation.lat, rescueTeamLocation.lng]} icon={rescueIcon}>
+                <Popup>Rescue Team</Popup>
+              </Marker>
+            </MapContainer>
           </div>
         </div>
       )}
