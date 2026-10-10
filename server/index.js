@@ -23,21 +23,27 @@ mongoose.connect(process.env.MONGO_URI)
 
 const allowedOrigins = [
   'http://localhost:5173', 
-  'http://localhost:3000', 
+  'http://localhost:3000',
+  'http://localhost:5174',
+  'http://localhost:5175', // Extra safety er jonno
   'https://smart-sos-system-lf2rtqyfc.vercel.app',
   'https://smart-sos-system.vercel.app'
 ];
 
+// Ekhane credentials: true add kora hoyeche jeno cookie/token thik moto kaj kore
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
-    methods: ['GET', 'POST']
+    methods: ['GET', 'POST'],
+    credentials: true
   }
 });
 
+// Express er CORS e o credentials: true add kora hoyeche
 app.use(cors({
   origin: allowedOrigins,
-  methods: ['GET', 'POST']
+  methods: ['GET', 'POST'],
+  credentials: true
 }));
 app.use(express.json({ limit: '50mb' }));
 
@@ -68,15 +74,15 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_jwt_key';
 // User Auth
 app.post('/api/auth/user/register', async (req, res) => {
   try {
-    const { name, email, password } = req.body;
-    let user = await User.findOne({ email });
-    if (user) return res.status(400).json({ success: false, message: 'Email already exists' });
+    const { username, password } = req.body;
+    let user = await User.findOne({ username });
+    if (user) return res.status(400).json({ success: false, message: 'Username already exists' });
     
-    user = new User({ name, email, password });
+    user = new User({ username, password });
     await user.save();
     
     const token = jwt.sign({ id: user._id, role: 'user' }, JWT_SECRET, { expiresIn: '1d' });
-    res.json({ success: true, token, user: { id: user._id, name: user.name, email: user.email } });
+    res.json({ success: true, token, user: { id: user._id, username: user.username, bloodGroup: user.bloodGroup, medicalNotes: user.medicalNotes } });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -84,15 +90,32 @@ app.post('/api/auth/user/register', async (req, res) => {
 
 app.post('/api/auth/user/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const user = await User.findOne({ email });
+    const { username, password } = req.body;
+    const user = await User.findOne({ username });
     if (!user) return res.status(400).json({ success: false, message: 'Invalid credentials' });
 
     const isMatch = await user.comparePassword(password);
     if (!isMatch) return res.status(400).json({ success: false, message: 'Invalid credentials' });
 
     const token = jwt.sign({ id: user._id, role: 'user' }, JWT_SECRET, { expiresIn: '1d' });
-    res.json({ success: true, token, user: { id: user._id, name: user.name, email: user.email } });
+    res.json({ success: true, token, user: { id: user._id, username: user.username, bloodGroup: user.bloodGroup, medicalNotes: user.medicalNotes } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Update Profile
+app.post('/api/auth/user/profile', async (req, res) => {
+  try {
+    const { userId, bloodGroup, medicalNotes } = req.body;
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    
+    user.bloodGroup = bloodGroup;
+    user.medicalNotes = medicalNotes;
+    await user.save();
+    
+    res.json({ success: true, user: { id: user._id, username: user.username, bloodGroup: user.bloodGroup, medicalNotes: user.medicalNotes } });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -246,6 +269,20 @@ io.on('connection', (socket) => {
     } catch (err) {
       console.error('Error updating live location:', err);
     }
+  });
+
+  socket.on('delete_sos', async (data) => {
+    try {
+      await Emergency.findOneAndDelete({ emergencyId: data.id });
+      io.emit('sos_deleted', { id: data.id });
+    } catch (err) {
+      console.error('Error deleting SOS:', err);
+    }
+  });
+
+  socket.on('provider_location_update', (data) => {
+    // Forward provider's live location to the specific SOS room or globally for the user to track
+    io.emit('rescue_team_location', { id: data.id, location: data.location });
   });
 
   socket.on('disconnect', () => {

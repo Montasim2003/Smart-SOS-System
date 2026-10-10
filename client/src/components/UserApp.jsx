@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { AlertTriangle, Flame, Plus, Shield, Mic, Square, Send, Loader2, LogOut } from 'lucide-react';
+import { AlertTriangle, Flame, Plus, Shield, Mic, Square, Send, Loader2, LogOut, User as UserIcon, Activity, MapPin } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export default function UserApp({ socket }) {
@@ -12,23 +12,58 @@ export default function UserApp({ socket }) {
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
   
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [profileForm, setProfileForm] = useState({ bloodGroup: '', medicalNotes: '' });
+  const [rescueTeamLocation, setRescueTeamLocation] = useState(null);
+  
   const [location, setLocation] = useState(null);
   
   const [currentSosId, setCurrentSosId] = useState(null);
   const [textMessage, setTextMessage] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState(null);
-  const [audioChunks, setAudioChunks] = useState([]);
   const [videoFile, setVideoFile] = useState(null);
 
   const watchIdRef = useRef(null);
+  const audioChunksRef = useRef([]); // অডিও চাঙ্ক সেভ করার জন্য রিফ
 
   useEffect(() => {
     const savedProfile = localStorage.getItem('userProfile');
     if (savedProfile) {
-      setProfile(JSON.parse(savedProfile));
+      const parsed = JSON.parse(savedProfile);
+      setProfile(parsed);
+      setProfileForm({ bloodGroup: parsed.bloodGroup || '', medicalNotes: parsed.medicalNotes || '' });
     }
-  }, []);
+
+    socket.on('rescue_team_location', (data) => {
+      if (data.id === currentSosId) {
+        setRescueTeamLocation(data.location);
+      }
+    });
+
+    return () => {
+      socket.off('rescue_team_location');
+    };
+  }, [currentSosId, socket]);
+
+  const saveProfile = async () => {
+    try {
+      const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:5000' : 'https://smart-sos-system.onrender.com';
+      const response = await fetch(`${API_URL}/api/auth/user/profile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: profile.id, ...profileForm })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setProfile(data.user);
+        localStorage.setItem('userProfile', JSON.stringify(data.user));
+        setIsProfileModalOpen(false);
+      }
+    } catch(e) {
+      console.error('Failed to save profile', e);
+    }
+  };
 
   const handleLogout = () => {
     localStorage.removeItem('userToken');
@@ -76,7 +111,7 @@ export default function UserApp({ socket }) {
       const position = await new Promise((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, { 
           enableHighAccuracy: true, 
-          timeout: 30000, 
+          timeout: 10000, // ডেমোর জন্য দ্রুত রেসপন্স
           maximumAge: 0 
         });
       });
@@ -95,10 +130,9 @@ export default function UserApp({ socket }) {
         { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
       );
     } catch (err) {
-      console.error("Failed to acquire live GPS:", err);
-      alert("Failed to acquire real GPS location. Please enable location services and try again.");
-      setLoading(false);
-      return;
+      console.warn("Failed to acquire live GPS:", err);
+      alert("GPS Signal Weak/Unavailable. Sending SOS without live location...");
+      // আমরা return করছি না, যাতে লোকেশন ছাড়াই SOS চলে যায়!
     }
     
     setLocation(currentLoc);
@@ -111,13 +145,15 @@ export default function UserApp({ socket }) {
       userId: profile?.id,
       id: sosId,
       service: service,
-      location: currentLoc,
+      location: currentLoc, // এটি null হলেও ব্যাকএন্ড রিসিভ করবে
       photo: frontPhoto || backPhoto,
       photoBack: backPhoto,
       photoFront: frontPhoto,
       profile: {
-        name: profile?.name,
-        email: profile?.email
+        username: profile?.username || profile?.name,
+        phone: profile?.phone,
+        bloodGroup: profile?.bloodGroup,
+        medicalNotes: profile?.medicalNotes
       }
     };
 
@@ -129,31 +165,36 @@ export default function UserApp({ socket }) {
 
   const startRecording = async () => {
     try {
+      audioChunksRef.current = [];
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
+      
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          setAudioChunks((prev) => [...prev, event.data]);
+          audioChunksRef.current.push(event.data);
         }
       };
+
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        setAudioBlob(blob);
+      };
+
       mediaRecorder.start();
       setIsRecording(true);
     } catch (err) {
       console.error("Microphone access denied:", err);
+      alert("Microphone access is required for voice notes.");
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.onstop = () => {
-        const blob = new Blob(audioChunks, { type: 'audio/webm' });
-        setAudioBlob(blob);
-        setAudioChunks([]);
-      };
+    if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
-      setIsRecording(true); // Wait, this was a bug in original code too. Should be false.
-      setTimeout(() => setIsRecording(false), 100);
+      setIsRecording(false);
+      // স্ট্রিম বন্ধ করে দেওয়া হচ্ছে যেন ব্রাউজারে মাইক আইকন থেকে যায় না
+      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
     }
   };
 
@@ -167,7 +208,7 @@ export default function UserApp({ socket }) {
     if (videoFile) formData.append('video', videoFile, videoFile.name);
 
     try {
-      const API_URL = 'http://localhost:5000';
+      const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:5000' : 'https://smart-sos-system.onrender.com';
       await fetch(`${API_URL}/api/sos/update`, {
         method: 'POST',
         body: formData,
@@ -203,11 +244,16 @@ export default function UserApp({ socket }) {
         <div className="app-header">
           <div>
             <h2 style={{color: 'white', fontSize: '1.25rem', fontWeight: 'bold'}}>Smart SOS</h2>
-            {profile && <p style={{color: 'var(--text-muted)', fontSize: '0.9rem'}}>{profile.name}</p>}
+            {profile && <p style={{color: 'var(--text-muted)', fontSize: '0.9rem'}}>{profile.username || profile.name}</p>}
           </div>
-          <button className="logout-btn flex items-center gap-1" onClick={handleLogout}>
-            <LogOut size={16} /> Logout
-          </button>
+          <div style={{display: 'flex', gap: '0.5rem'}}>
+            <button className="btn-secondary flex items-center gap-1" style={{padding: '0.5rem'}} onClick={() => setIsProfileModalOpen(true)}>
+              <UserIcon size={16} /> Profile
+            </button>
+            <button className="logout-btn flex items-center gap-1" onClick={handleLogout}>
+              <LogOut size={16} /> Logout
+            </button>
+          </div>
         </div>
 
         <div className="sos-button-container">
@@ -343,6 +389,65 @@ export default function UserApp({ socket }) {
           }}>
             <Loader2 className="animate-spin text-cyan-400" size={48} style={{color: 'var(--primary-color)'}} />
             <p style={{color: 'white', fontWeight: 'bold'}}>{loadingMessage}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Profile Modal */}
+      {isProfileModalOpen && (
+        <div style={{
+          position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'var(--bg-card)', padding: '2rem', borderRadius: '1.5rem',
+            width: '100%', maxWidth: '400px', border: '1px solid var(--primary-color)'
+          }}>
+            <h2 style={{color: 'white', marginBottom: '1rem', fontSize: '1.5rem', fontWeight: 'bold'}}>Medical Profile</h2>
+            <div style={{marginBottom: '1rem'}}>
+              <label style={{display: 'block', color: 'var(--text-muted)', marginBottom: '0.5rem'}}>Blood Group</label>
+              <input 
+                type="text" 
+                value={profileForm.bloodGroup} 
+                onChange={(e) => setProfileForm({...profileForm, bloodGroup: e.target.value})}
+                style={{width: '100%', padding: '0.8rem', borderRadius: '0.5rem', backgroundColor: 'rgba(15,23,42,0.5)', color: 'white', border: '1px solid var(--border-color)'}}
+                placeholder="e.g. O+"
+              />
+            </div>
+            <div style={{marginBottom: '1.5rem'}}>
+              <label style={{display: 'block', color: 'var(--text-muted)', marginBottom: '0.5rem'}}>Medical Notes / Conditions</label>
+              <textarea 
+                value={profileForm.medicalNotes} 
+                onChange={(e) => setProfileForm({...profileForm, medicalNotes: e.target.value})}
+                style={{width: '100%', padding: '0.8rem', borderRadius: '0.5rem', backgroundColor: 'rgba(15,23,42,0.5)', color: 'white', border: '1px solid var(--border-color)', minHeight: '80px', resize: 'none'}}
+                placeholder="Allergies, chronic conditions..."
+              />
+            </div>
+            <div style={{display: 'flex', gap: '1rem'}}>
+              <button onClick={() => setIsProfileModalOpen(false)} style={{flex: 1, padding: '0.8rem', borderRadius: '0.5rem', backgroundColor: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-color)', cursor: 'pointer'}}>Cancel</button>
+              <button onClick={saveProfile} style={{flex: 1, padding: '0.8rem', borderRadius: '0.5rem', backgroundColor: 'var(--primary-color)', color: 'black', fontWeight: 'bold', border: 'none', cursor: 'pointer'}}>Save Profile</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tracker UI */}
+      {rescueTeamLocation && currentSosId && (
+        <div style={{
+          position: 'fixed', bottom: '2rem', left: '50%', transform: 'translateX(-50%)',
+          backgroundColor: 'var(--bg-card)', padding: '1rem 1.5rem', borderRadius: '1rem',
+          border: '1px solid var(--success-color)', boxShadow: '0 0 20px rgba(16,185,129,0.3)',
+          display: 'flex', alignItems: 'center', gap: '1rem', zIndex: 500, width: '90%', maxWidth: '400px'
+        }}>
+          <div style={{backgroundColor: 'rgba(16,185,129,0.2)', padding: '0.8rem', borderRadius: '50%', color: 'var(--success-color)'}}>
+            <Activity className="animate-pulse" size={24} />
+          </div>
+          <div>
+            <div style={{color: 'var(--success-color)', fontWeight: 'bold', fontSize: '1.1rem'}}>Rescue Team En Route</div>
+            <div style={{color: 'var(--text-muted)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.3rem'}}>
+              <MapPin size={12} />
+              Lat: {rescueTeamLocation.lat.toFixed(4)}, Lng: {rescueTeamLocation.lng.toFixed(4)}
+            </div>
           </div>
         </div>
       )}

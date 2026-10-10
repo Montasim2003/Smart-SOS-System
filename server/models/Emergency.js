@@ -13,10 +13,10 @@ const emergencySchema = new mongoose.Schema({
   photoFrontUrl: { type: String },
   photoBackUrl: { type: String },
   profile: {
-    name: { type: String },
+    username: { type: String },
     phone: { type: String },
-    bloodType: { type: String },
-    conditions: { type: String },
+    bloodGroup: { type: String },
+    medicalNotes: { type: String },
     contacts: { type: String },
   },
   status: { type: String, default: 'Pending' }, // Pending, Dispatched, Resolved

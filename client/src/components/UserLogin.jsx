@@ -1,12 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UserPlus, LogIn, ShieldAlert } from 'lucide-react';
 
 export default function UserLogin() {
   const [isLogin, setIsLogin] = useState(true);
-  const [formData, setFormData] = useState({ name: '', email: '', password: '' });
+  const [formData, setFormData] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (localStorage.getItem('userToken')) {
+      navigate('/user/app');
+    }
+  }, [navigate]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -50,28 +56,14 @@ export default function UserLogin() {
         {error && <div className="error-message">{error}</div>}
 
         <form onSubmit={handleSubmit}>
-          {!isLogin && (
-            <div className="form-group">
-              <label className="form-label">Full Name</label>
-              <input 
-                type="text" 
-                className="form-input" 
-                placeholder="John Doe"
-                value={formData.name}
-                onChange={e => setFormData({...formData, name: e.target.value})}
-                required
-              />
-            </div>
-          )}
-          
           <div className="form-group">
-            <label className="form-label">Email Address</label>
+            <label className="form-label">Username</label>
             <input 
-              type="email" 
+              type="text" 
               className="form-input" 
-              placeholder="you@example.com"
-              value={formData.email}
-              onChange={e => setFormData({...formData, email: e.target.value})}
+              placeholder="e.g. Noman"
+              value={formData.username}
+              onChange={e => setFormData({...formData, username: e.target.value})}
               required
             />
           </div>
@@ -85,6 +77,7 @@ export default function UserLogin() {
               value={formData.password}
               onChange={e => setFormData({...formData, password: e.target.value})}
               required
+              minLength={4}
             />
           </div>
 
