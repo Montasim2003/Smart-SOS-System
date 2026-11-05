@@ -1,95 +1,124 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, LogIn, ShieldAlert } from 'lucide-react';
+import { Users, ArrowLeft } from 'lucide-react';
+import { Sky3DScene } from '../App';
+
+const API_URL = window.location.hostname === 'localhost'
+  ? 'http://localhost:5000'
+  : 'https://smart-sos-system.onrender.com';
 
 export default function UserLogin() {
-  const [isLogin, setIsLogin] = useState(true);
-  const [formData, setFormData] = useState({ username: '', password: '' });
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-
-  useEffect(() => {
-    if (localStorage.getItem('userToken')) {
-      navigate('/user/app');
-    }
-  }, [navigate]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    const endpoint = isLogin ? '/api/auth/user/login' : '/api/auth/user/register';
-    
-    const API_URL = window.location.hostname === 'localhost' 
-      ? 'http://localhost:5000' 
-      : 'https://smart-sos-system.onrender.com';
+    setLoading(true);
+
+    const endpoint = isRegistering ? '/api/auth/user/register' : '/api/auth/user/login';
 
     try {
-      const response = await fetch(`${API_URL}${endpoint}`, {
+      const res = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: JSON.stringify({ username, password })
       });
-      
-      const data = await response.json();
+      const data = await res.json();
+
       if (data.success) {
+        localStorage.setItem('sos_token', data.token);
+        localStorage.setItem('sos_user', JSON.stringify(data.user));
         localStorage.setItem('userToken', data.token);
-        localStorage.setItem('userProfile', JSON.stringify(data.user));
+        localStorage.setItem('userInfo', JSON.stringify(data.user));
         navigate('/user/app');
       } else {
-        setError(data.message);
+        setError(data.message || 'Authentication failed');
       }
     } catch (err) {
-      setError('Failed to connect to server');
+      setError('Server connection failed. Please try again.');
     }
+    setLoading(false);
   };
 
   return (
-    <div className="auth-container">
-      <div className="auth-card">
-        <div className="auth-header">
-          <ShieldAlert size={48} className="auth-icon" />
-          <h2 className="auth-title">User Portal</h2>
-          <p className="auth-subtitle">{isLogin ? 'Sign in to your account' : 'Create a new account'}</p>
+    <div className="water-bg-wrapper">
+      <Sky3DScene />
+
+      <div className="glass-3d-shell" style={{ maxWidth: '420px' }}>
+        <button className="pill-btn-3d" onClick={() => navigate('/')} style={{ marginBottom: '1.2rem' }}>
+          <ArrowLeft size={15} /> Back
+        </button>
+
+        <div style={{ textAlign: 'center', marginBottom: '1.6rem' }}>
+          <div className="orb-icon-3d">
+            <div className="orb-icon-inner">
+              <Users size={34} />
+            </div>
+          </div>
+          <h2 className="title-gradient-3d" style={{ fontSize: '1.75rem' }}>
+            Citizen SOS Portal
+          </h2>
+          <p className="subtitle-vivid" style={{ fontSize: '0.92rem', marginTop: '0.3rem' }}>
+            {isRegistering ? 'Create your emergency profile' : 'Sign in for instant 3D SOS access'}
+          </p>
         </div>
 
-        {error && <div className="error-message">{error}</div>}
+        {error && (
+          <div style={{
+            padding: '0.85rem', marginBottom: '1.2rem', borderRadius: '14px',
+            background: 'rgba(225, 29, 72, 0.12)', border: '1.5px solid rgba(225, 29, 72, 0.45)',
+            color: '#be123c', textAlign: 'center', fontSize: '0.88rem', fontWeight: 700
+          }}>
+            {error}
+          </div>
+        )}
 
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label className="form-label">Username</label>
-            <input 
-              type="text" 
-              className="form-input" 
-              placeholder="e.g. Noman"
-              value={formData.username}
-              onChange={e => setFormData({...formData, username: e.target.value})}
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.35rem' }}>
+              Username
+            </label>
+            <input
+              className="input-3d"
+              type="text"
               required
+              placeholder="Enter your username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
             />
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Password</label>
-            <input 
-              type="password" 
-              className="form-input" 
+          <div>
+            <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.35rem' }}>
+              Password
+            </label>
+            <input
+              className="input-3d"
+              type="password"
+              required
               placeholder="••••••••"
-              value={formData.password}
-              onChange={e => setFormData({...formData, password: e.target.value})}
-              required
-              minLength={4}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
             />
           </div>
 
-          <button type="submit" className="btn-primary flex justify-center items-center gap-2">
-            {isLogin ? <><LogIn size={18} /> Sign In</> : <><UserPlus size={18} /> Register</>}
+          <button type="submit" className="btn-3d-aqua" style={{ marginTop: '0.6rem' }} disabled={loading}>
+            {loading ? 'Please wait...' : isRegistering ? 'Create Account' : 'Sign In'}
           </button>
         </form>
 
-        <div className="auth-toggle">
-          {isLogin ? "Don't have an account?" : "Already have an account?"}
-          <span className="auth-link" onClick={() => setIsLogin(!isLogin)}>
-            {isLogin ? 'Register' : 'Sign in'}
-          </span>
+        <div style={{ textAlign: 'center', marginTop: '1.4rem' }}>
+          <button
+            onClick={() => { setIsRegistering(!isRegistering); setError(''); }}
+            style={{ background: 'none', border: 'none', color: '#0052cc', cursor: 'pointer', fontWeight: 800, fontSize: '0.92rem' }}
+          >
+            {isRegistering ? 'Already registered? Sign in' : 'New user? Create emergency account'}
+          </button>
         </div>
       </div>
     </div>

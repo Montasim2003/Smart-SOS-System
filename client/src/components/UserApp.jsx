@@ -1,509 +1,510 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { AlertTriangle, Flame, Plus, Shield, Mic, Square, Send, Loader2, LogOut, User as UserIcon, Activity, MapPin, X } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { io } from 'socket.io-client';
+import {
+  Plus, Flame, Shield, AlertTriangle, User, LogOut,
+  Activity, X, Mic, Send, CheckCircle
+} from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
+import { Sky3DScene } from '../App';
 
-// ম্যাপের আইকন ফিক্স করার জন্য
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
 const rescueIcon = new L.Icon({
-  iconUrl: 'https://cdn-icons-png.flaticon.com/512/883/883407.png', // Rescue vehicle icon
-  iconSize: [40, 40],
-  iconAnchor: [20, 20],
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
 });
 
-export default function UserApp({ socket }) {
-  const mediaRecorderRef = useRef(null);
+const BACKEND_URL = window.location.hostname === 'localhost'
+  ? 'http://localhost:5000'
+  : 'https://smart-sos-system.onrender.com';
+
+const socket = io(BACKEND_URL, {
+  transports: ['polling', 'websocket'],
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 1000,
+  timeout: 20000
+});
+
+export default function UserApp() {
   const navigate = useNavigate();
-  
-  const [profile, setProfile] = useState(null);
-  const [selectedService, setSelectedService] = useState(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [loadingMessage, setLoadingMessage] = useState('');
-  
-  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-  const [profileForm, setProfileForm] = useState({ bloodGroup: '', medicalNotes: '' });
-  const [rescueTeamLocation, setRescueTeamLocation] = useState(null);
-  
+  const [user, setUser] = useState(null);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+
+  const [phone, setPhone] = useState('');
+  const [bloodGroup, setBloodGroup] = useState('');
+  const [medicalNotes, setMedicalNotes] = useState('');
+
+  const [activeSosId, setActiveSosId] = useState(null);
+  const [sosModalOpen, setSosModalOpen] = useState(false);
+  const [selectedService, setSelectedService] = useState('All Emergency');
   const [location, setLocation] = useState(null);
-  
-  const [currentSosId, setCurrentSosId] = useState(null);
-  const [textMessage, setTextMessage] = useState('');
-  const [isRecording, setIsRecording] = useState(false);
-  const [audioBlob, setAudioBlob] = useState(null);
-  const [videoFile, setVideoFile] = useState(null);
+  const [message, setMessage] = useState('');
+  const [isSendingMedia, setIsSendingMedia] = useState(false);
 
-  const [showMap, setShowMap] = useState(false); // লাইভ ম্যাপ দেখানোর স্টেট
+  const [rescueDispatched, setRescueDispatched] = useState(false);
+  const [rescueTeamLocation, setRescueTeamLocation] = useState(null);
+  const [showMap, setShowMap] = useState(false);
 
-  const watchIdRef = useRef(null);
-  const audioChunksRef = useRef([]);
+  const [voiceBlob, setVoiceBlob] = useState(null);
+  const [videoBlob, setVideoBlob] = useState(null);
+  const [recordingVoice, setRecordingVoice] = useState(false);
+
+  const mediaRecorderRef = useRef(null);
 
   useEffect(() => {
-    const savedProfile = localStorage.getItem('userProfile');
-    if (savedProfile) {
-      const parsed = JSON.parse(savedProfile);
-      setProfile(parsed);
-      setProfileForm({ bloodGroup: parsed.bloodGroup || '', medicalNotes: parsed.medicalNotes || '' });
+    const storedUser = localStorage.getItem('sos_user');
+    if (storedUser) {
+      const parsed = JSON.parse(storedUser);
+      setUser(parsed);
+      setPhone(parsed.phone || '');
+      setBloodGroup(parsed.bloodGroup || '');
+      setMedicalNotes(parsed.medicalNotes || '');
     }
 
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        (err) => console.warn('Initial GPS warning:', err),
+        { enableHighAccuracy: true }
+      );
+    }
+
+    socket.on('sos_accepted', () => {
+      setRescueDispatched(true);
+    });
+
     socket.on('rescue_team_location', (data) => {
-      if (data.id === currentSosId) {
-        setRescueTeamLocation(data.location);
-      }
+      setRescueTeamLocation(data.location);
+      setRescueDispatched(true);
     });
 
     return () => {
+      socket.off('sos_accepted');
       socket.off('rescue_team_location');
     };
-  }, [currentSosId, socket]);
+  }, []);
 
-  const saveProfile = async () => {
+  const captureCameraPhoto = async (facingMode = 'user') => {
     try {
-      const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:5000' : 'https://smart-sos-system.onrender.com';
-      const response = await fetch(`${API_URL}/api/auth/user/profile`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: profile.id, ...profileForm })
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode }
       });
-      const data = await response.json();
-      if (data.success) {
-        setProfile(data.user);
-        localStorage.setItem('userProfile', JSON.stringify(data.user));
-        setIsProfileModalOpen(false);
-      }
-    } catch(e) {
-      console.error('Failed to save profile', e);
-    }
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem('userToken');
-    localStorage.removeItem('userProfile');
-    navigate('/user/login');
-  };
-
-  const captureCamera = async (facingMode) => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode } });
       const video = document.createElement('video');
       video.srcObject = stream;
       await video.play();
+
       const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      canvas.getContext('2d').drawImage(video, 0, 0);
-      const photo = canvas.toDataURL('image/jpeg');
-      stream.getTracks().forEach(track => track.stop());
-      return photo;
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      stream.getTracks().forEach((track) => track.stop());
+      return canvas.toDataURL('image/jpeg', 0.7);
     } catch (err) {
-      console.error(`Camera access failed for ${facingMode}`, err);
       return null;
     }
   };
 
-  const handleEmergencyClick = async (service) => {
-    setSelectedService(service);
-    
-    if (!navigator.onLine) {
-      alert(`No Internet Connection!\nFallback: Sending Offline SMS`);
-      window.location.href = `sms:911?body=EMERGENCY! Need ${service}. Name: ${profile?.name}`;
-      return;
-    }
+  const triggerSOS = async (serviceName) => {
+    const sosId = 'SOS-' + Date.now();
+    setActiveSosId(sosId);
+    setSelectedService(serviceName);
+    setSosModalOpen(true);
 
-    setLoading(true);
-    const sosId = Date.now().toString();
-    setCurrentSosId(sosId);
-    
-    let currentLoc = null;
-
-    setLoadingMessage('Acquiring Live GPS Signal...');
-    try {
-      if (!navigator.geolocation) throw new Error("Geolocation not supported");
-      const position = await new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, { 
-          enableHighAccuracy: true, 
-          timeout: 10000,
-          maximumAge: 0 
-        });
-      });
-      currentLoc = { lat: position.coords.latitude, lng: position.coords.longitude };
-      
-      if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-      }
-      watchIdRef.current = navigator.geolocation.watchPosition(
+    let currentLoc = location || { lat: 23.8103, lng: 90.4125 };
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
         (pos) => {
-          const newLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          setLocation(newLocation);
-          socket.emit('live_location_update', { id: sosId, location: newLocation });
+          currentLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          setLocation(currentLoc);
+          socket.emit('live_location_update', { id: sosId, location: currentLoc });
         },
-        (err) => console.warn('Live tracking error:', err),
-        { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
+        () => {},
+        { enableHighAccuracy: true }
       );
-    } catch (err) {
-      console.warn("Failed to acquire live GPS:", err);
-      alert("GPS Signal Weak/Unavailable. Sending SOS without live location...");
     }
-    
-    setLocation(currentLoc);
 
-    setLoadingMessage('Capturing Environment...');
-    const frontPhoto = await captureCamera('user');
-    const backPhoto = await captureCamera('environment');
+    const photoFront = await captureCameraPhoto('user');
+    const photoBack = await captureCameraPhoto('environment');
 
-    const initialData = {
-      userId: profile?.id,
+    socket.emit('initial_sos', {
       id: sosId,
-      service: service,
+      userId: user?.id || null,
+      service: serviceName,
       location: currentLoc,
-      photo: frontPhoto || backPhoto,
-      photoBack: backPhoto,
-      photoFront: frontPhoto,
+      photo: photoFront,
+      photoFront,
+      photoBack,
       profile: {
-        username: profile?.username || profile?.name,
-        phone: profile?.phone,
-        bloodGroup: profile?.bloodGroup,
-        medicalNotes: profile?.medicalNotes
+        name: user?.username || 'Anonymous User',
+        phone: phone || 'Not Provided',
+        bloodGroup: bloodGroup || 'N/A',
+        medicalNotes: medicalNotes || 'None'
       }
-    };
-
-    socket.emit('initial_sos', initialData);
-
-    setLoading(false);
-    setIsModalOpen(true);
+    });
   };
 
-  const startRecording = async () => {
+  const handleSaveProfile = async () => {
+    const updatedLocal = {
+      ...(user || {}),
+      phone,
+      bloodGroup,
+      medicalNotes
+    };
+    localStorage.setItem('sos_user', JSON.stringify(updatedLocal));
+    setUser(updatedLocal);
+
     try {
-      audioChunksRef.current = [];
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
+      if (user?.id) {
+        const res = await fetch(`${BACKEND_URL}/api/auth/user/profile`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: user.id, phone, bloodGroup, medicalNotes })
+        });
+        const data = await res.json();
+        if (data.success) {
+          const mergedUser = { ...data.user, phone: data.user.phone || phone };
+          localStorage.setItem('sos_user', JSON.stringify(mergedUser));
+          setUser(mergedUser);
         }
-      };
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    setShowProfileModal(false);
+  };
 
-      mediaRecorder.onstop = () => {
-        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        setAudioBlob(blob);
+  const startVoiceRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks = [];
+      recorder.ondataavailable = (e) => chunks.push(e.data);
+      recorder.onstop = () => {
+        setVoiceBlob(new Blob(chunks, { type: 'audio/webm' }));
+        stream.getTracks().forEach((t) => t.stop());
       };
-
-      mediaRecorder.start();
-      setIsRecording(true);
-    } catch (err) {
-      console.error("Microphone access denied:", err);
-      alert("Microphone access is required for voice notes.");
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setRecordingVoice(true);
+    } catch (e) {
+      alert('Microphone permission required!');
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
+    if (mediaRecorderRef.current) {
       mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      setRecordingVoice(false);
     }
   };
 
-  const sendAdditionalDetails = async () => {
-    if (!currentSosId) return;
-    
-    const formData = new FormData();
-    formData.append('id', currentSosId);
-    if (textMessage) formData.append('message', textMessage);
-    if (audioBlob) formData.append('voice', audioBlob, 'voice.webm');
-    if (videoFile) formData.append('video', videoFile, videoFile.name);
-
+  const handleSendAdditionalMedia = async () => {
+    if (!activeSosId) return;
+    setIsSendingMedia(true);
     try {
-      const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:5000' : 'https://smart-sos-system.onrender.com';
-      await fetch(`${API_URL}/api/sos/update`, {
-        method: 'POST',
-        body: formData,
-      });
-    } catch (error) {
-      console.error('Error updating SOS:', error);
-    }
+      const formData = new FormData();
+      formData.append('id', activeSosId);
+      if (message) formData.append('message', message);
+      if (voiceBlob) formData.append('voice', voiceBlob, 'voice.webm');
+      if (videoBlob) formData.append('video', videoBlob, 'video.webm');
 
-    setTextMessage('');
-    setAudioBlob(null);
-    setVideoFile(null);
-    setIsModalOpen(false);
+      await fetch(`${BACKEND_URL}/api/sos/update`, {
+        method: 'POST',
+        body: formData
+      });
+      setSosModalOpen(false);
+      setMessage('');
+      setVoiceBlob(null);
+      setVideoBlob(null);
+    } catch (err) {
+      console.error(err);
+    }
+    setIsSendingMedia(false);
   };
 
-  useEffect(() => {
-    return () => {
-      if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-      }
-    };
-  }, []);
-
-  const services = [
-    { name: 'Ambulance', icon: <Plus size={48} /> },
-    { name: 'Fire Service', icon: <Flame size={48} /> },
-    { name: 'Hospital', icon: <AlertTriangle size={48} /> },
-    { name: 'Police', icon: <Shield size={48} /> },
-  ];
+  const handleLogout = () => {
+    localStorage.removeItem('sos_user');
+    localStorage.removeItem('sos_token');
+    navigate('/');
+  };
 
   return (
-    <div className="app-container">
-      <div className="app-wrapper">
-        <div className="app-header">
+    <div className="water-bg-wrapper">
+      <Sky3DScene />
+
+      <div className="glass-3d-shell">
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          paddingBottom: '1.1rem',
+          marginBottom: '0.8rem',
+          borderBottom: '1.5px solid rgba(0, 102, 255, 0.14)'
+        }}>
           <div>
-            <h2 style={{color: 'white', fontSize: '1.25rem', fontWeight: 'bold'}}>Smart SOS</h2>
-            {profile && <p style={{color: 'var(--text-muted)', fontSize: '0.9rem'}}>{profile.username || profile.name}</p>}
+            <h2 className="title-gradient-3d" style={{ fontSize: '1.5rem' }}>
+              Smart SOS
+            </h2>
+            <span style={{ fontSize: '0.9rem', color: '#0052cc', fontWeight: 800 }}>
+              {user?.username || 'Noman'} {phone && `• ${phone}`}
+            </span>
           </div>
-          <div style={{display: 'flex', gap: '0.5rem'}}>
-            <button className="btn-secondary flex items-center gap-1" style={{padding: '0.5rem'}} onClick={() => setIsProfileModalOpen(true)}>
-              <UserIcon size={16} /> Profile
+
+          <div style={{ display: 'flex', gap: '0.6rem' }}>
+            <button className="pill-btn-3d" onClick={() => setShowProfileModal(true)}>
+              <User size={15} /> Profile
             </button>
-            <button className="logout-btn flex items-center gap-1" onClick={handleLogout}>
-              <LogOut size={16} /> Logout
+            <button className="pill-btn-3d" onClick={handleLogout}>
+              <LogOut size={15} /> Logout
             </button>
           </div>
         </div>
 
-        <div className="sos-button-container">
-          <button className="sos-button" onClick={() => handleEmergencyClick('General SOS')} disabled={loading}>
-            SOS
+        <p style={{ textAlign: 'center', color: '#1e3a8a', fontSize: '0.9rem', marginBottom: '0.5rem', fontWeight: 700 }}>
+          Tap center <strong style={{ color: '#e11d48' }}>SOS Core (Alerts All)</strong> or select a 3D unit:
+        </p>
+
+        <div className="cross-hub-stage">
+          <div className="cross-track-h" />
+          <div className="cross-track-v" />
+
+          <button className="service-orb-node node-top" onClick={() => triggerSOS('Ambulance')}>
+            <div className="service-orb-inner">
+              <Plus size={24} strokeWidth={2.8} />
+              <span>Ambulance</span>
+            </div>
+          </button>
+
+          <button className="service-orb-node node-left" onClick={() => triggerSOS('Fire Service')}>
+            <div className="service-orb-inner">
+              <Flame size={24} strokeWidth={2.5} />
+              <span>Fire</span>
+            </div>
+          </button>
+
+          <button className="sos-core-3d" onClick={() => triggerSOS('All Emergency')}>
+            <div className="sos-core-inner">
+              <span>SOS</span>
+            </div>
+          </button>
+
+          <button className="service-orb-node node-right" onClick={() => triggerSOS('Police')}>
+            <div className="service-orb-inner">
+              <Shield size={24} strokeWidth={2.5} />
+              <span>Police</span>
+            </div>
+          </button>
+
+          <button className="service-orb-node node-bottom" onClick={() => triggerSOS('Hospital')}>
+            <div className="service-orb-inner">
+              <AlertTriangle size={24} strokeWidth={2.5} />
+              <span>Hospital</span>
+            </div>
           </button>
         </div>
 
-        <div style={{padding: '0 1.5rem', textAlign: 'center', marginBottom: '1rem'}}>
-          <p style={{color: 'var(--text-muted)'}}>Or select a specific service to alert:</p>
-        </div>
-
-        <div className="service-grid">
-          {services.map((service) => (
-            <button
-              key={service.name}
-              onClick={() => handleEmergencyClick(service.name)}
-              disabled={loading}
-              className="service-btn"
-            >
-              <div style={{color: 'var(--primary-color)'}}>{service.icon}</div>
-              <span style={{fontWeight: 'bold'}}>{service.name}</span>
-            </button>
-          ))}
-        </div>
+        {rescueDispatched && (
+          <div
+            onClick={() => setShowMap(true)}
+            style={{
+              marginTop: '1.2rem',
+              padding: '1rem 1.2rem',
+              borderRadius: '20px',
+              background: 'linear-gradient(135deg, #d1fae5, #e0f2fe)',
+              border: '2px solid #059669',
+              boxShadow: '0 10px 25px rgba(5, 150, 105, 0.25)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '1rem',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{
+              width: '44px', height: '44px', borderRadius: '50%',
+              background: '#059669', display: 'flex',
+              alignItems: 'center', justifyContent: 'center', color: '#ffffff'
+            }}>
+              <Activity size={24} />
+            </div>
+            <div>
+              <h4 style={{ color: '#065f46', fontSize: '1rem', fontWeight: 800, marginBottom: '2px' }}>
+                Rescue Team En Route
+              </h4>
+              <p style={{ color: '#047857', fontSize: '0.84rem', fontWeight: 700 }}>
+                Click here to track live location on map
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
-      {isModalOpen && (
+      {showProfileModal && (
         <div style={{
-          position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', zIndex: 1000
+          position: 'fixed', inset: 0, backgroundColor: 'rgba(10, 37, 64, 0.45)',
+          backdropFilter: 'blur(10px)', zIndex: 2500,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem'
         }}>
-          <div style={{
-            backgroundColor: 'var(--bg-card)', padding: '2rem', borderRadius: '1.5rem',
-            width: '100%', maxWidth: '500px', border: '1px solid var(--primary-color)',
-            boxShadow: '0 0 30px var(--primary-glow)'
-          }}>
-            <h2 style={{fontSize: '2rem', color: 'white', marginBottom: '0.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-              <span style={{width: '12px', height: '12px', borderRadius: '50%', backgroundColor: 'var(--primary-color)', display: 'inline-block', boxShadow: '0 0 10px var(--primary-glow)'}}></span>
-              SOS Sent!
+          <div className="glass-3d-shell" style={{ maxWidth: '430px' }}>
+            <h2 className="title-gradient-3d" style={{ fontSize: '1.5rem', marginBottom: '1.2rem' }}>
+              Emergency Medical Profile
             </h2>
-            <p style={{color: 'var(--primary-color)', marginBottom: '1.5rem', fontWeight: 'bold'}}>
-              Location & Photo dispatched to {selectedService}.
+
+            <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.35rem' }}>
+              Phone Number (Emergency Contact)
+            </label>
+            <input
+              className="input-3d"
+              type="tel"
+              style={{ marginBottom: '1rem' }}
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="e.g. 017XXXXXXXX"
+            />
+
+            <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.35rem' }}>
+              Blood Group
+            </label>
+            <input
+              className="input-3d"
+              style={{ marginBottom: '1rem' }}
+              value={bloodGroup}
+              onChange={(e) => setBloodGroup(e.target.value)}
+              placeholder="e.g. A+, O+, B+, AB-"
+            />
+
+            <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.35rem' }}>
+              Medical Report / Conditions
+            </label>
+            <textarea
+              className="input-3d"
+              rows={3}
+              style={{ marginBottom: '1.4rem', resize: 'none' }}
+              value={medicalNotes}
+              onChange={(e) => setMedicalNotes(e.target.value)}
+              placeholder="Allergies, diabetes, asthma, or medical notes..."
+            />
+
+            <div style={{ display: 'flex', gap: '0.8rem' }}>
+              <button
+                className="pill-btn-3d"
+                style={{ flex: 1, justifyContent: 'center', padding: '0.85rem' }}
+                onClick={() => setShowProfileModal(false)}
+              >
+                Cancel
+              </button>
+              <button className="btn-3d-aqua" style={{ flex: 1 }} onClick={handleSaveProfile}>
+                Save Profile
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {sosModalOpen && (
+        <div style={{
+          position: 'fixed', inset: 0, backgroundColor: 'rgba(10, 37, 64, 0.5)',
+          backdropFilter: 'blur(12px)', zIndex: 2600,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem'
+        }}>
+          <div className="glass-3d-shell" style={{ maxWidth: '430px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.8rem' }}>
+              <h3 style={{ color: '#e11d48', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <CheckCircle size={20} /> {selectedService} Alert Sent!
+              </h3>
+              <button onClick={() => setSosModalOpen(false)} style={{ background: 'none', border: 'none', color: '#0a2540', cursor: 'pointer' }}>
+                <X size={22} />
+              </button>
+            </div>
+
+            <p style={{ fontSize: '0.88rem', color: '#1e3a8a', marginBottom: '1rem', fontWeight: 600 }}>
+              Your GPS location, Blood Group, Phone Number & Camera photos have been dispatched. Add optional voice or notes:
             </p>
-            
-            <div style={{display: 'flex', flexDirection: 'column', gap: '1.5rem'}}>
-              <div>
-                <label style={{display: 'block', color: 'var(--text-muted)', marginBottom: '0.5rem', fontWeight: 'bold'}}>Additional details (Optional)</label>
-                <textarea
-                  value={textMessage}
-                  onChange={(e) => setTextMessage(e.target.value)}
-                  style={{
-                    width: '100%', backgroundColor: 'rgba(15,23,42,0.5)', color: 'white',
-                    padding: '1rem', borderRadius: '0.75rem', border: '1px solid var(--border-color)',
-                    resize: 'none', minHeight: '100px', outline: 'none'
-                  }}
-                  placeholder="Describe your emergency..."
-                />
-              </div>
 
-              <div style={{display: 'flex', gap: '1rem'}}>
-                <button
-                  onClick={isRecording ? stopRecording : startRecording}
-                  style={{
-                    flex: 1, padding: '1rem', borderRadius: '0.75rem', fontWeight: 'bold',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
-                    backgroundColor: isRecording ? 'rgba(239, 68, 68, 0.2)' : 'rgba(15,23,42,0.5)',
-                    color: isRecording ? 'var(--danger-color)' : 'white',
-                    border: `1px solid ${isRecording ? 'var(--danger-color)' : 'var(--border-color)'}`,
-                    cursor: 'pointer'
-                  }}
-                >
-                  {isRecording ? <Square size={20} /> : <Mic size={20} />}
-                  {isRecording ? 'Stop' : 'Voice Note'}
+            <textarea
+              className="input-3d"
+              rows={3}
+              placeholder="Describe your emergency situation..."
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              style={{ marginBottom: '1rem' }}
+            />
+
+            <div style={{ display: 'flex', gap: '0.8rem', marginBottom: '1.2rem' }}>
+              {!recordingVoice ? (
+                <button className="pill-btn-3d" style={{ flex: 1, justifyContent: 'center', padding: '0.75rem' }} onClick={startVoiceRecording}>
+                  <Mic size={16} /> {voiceBlob ? 'Voice Recorded ✓' : 'Record Voice'}
                 </button>
-
-                <div style={{flex: 1, position: 'relative'}}>
-                  <input
-                    type="file"
-                    accept="video/*"
-                    capture="environment"
-                    onChange={(e) => setVideoFile(e.target.files[0])}
-                    style={{position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer'}}
-                  />
-                  <div style={{
-                    padding: '1rem', borderRadius: '0.75rem', fontWeight: 'bold',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    backgroundColor: videoFile ? 'rgba(6, 182, 212, 0.2)' : 'rgba(15,23,42,0.5)',
-                    color: videoFile ? 'var(--primary-color)' : 'white',
-                    border: `1px solid ${videoFile ? 'var(--primary-color)' : 'var(--border-color)'}`,
-                    pointerEvents: 'none'
-                  }}>
-                    {videoFile ? 'Video Attached' : 'Attach Video'}
-                  </div>
-                </div>
-              </div>
-
-              {(audioBlob || videoFile) && (
-                <div style={{color: 'var(--primary-color)', fontSize: '0.9rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                  <div style={{width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--primary-color)'}}></div>
-                  Media ready to send
-                </div>
+              ) : (
+                <button className="pill-btn-3d" style={{ flex: 1, justifyContent: 'center', background: '#e11d48', color: '#fff' }} onClick={stopRecording}>
+                  Stop Recording...
+                </button>
               )}
-
-              <button
-                onClick={sendAdditionalDetails}
-                className="btn-primary"
-                style={{padding: '1.25rem', fontSize: '1.1rem', display: 'flex', justifyContent: 'center', gap: '0.5rem'}}
-              >
-                <Send size={24} /> Send Additional Details
-              </button>
-              
-              <button
-                onClick={() => setIsModalOpen(false)}
-                style={{background: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '0.5rem'}}
-              >
-                Skip / Cancel
-              </button>
             </div>
-          </div>
-        </div>
-      )}
-      
-      {loading && (
-        <div style={{
-          position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 2000,
-          display: 'flex', alignItems: 'center', justifyContent: 'center'
-        }}>
-          <div style={{
-            backgroundColor: 'var(--bg-card)', padding: '2rem', borderRadius: '1rem',
-            border: '1px solid var(--primary-color)', display: 'flex', flexDirection: 'column',
-            alignItems: 'center', gap: '1rem', boxShadow: '0 0 20px var(--primary-glow)'
-          }}>
-            <Loader2 className="animate-spin text-cyan-400" size={48} style={{color: 'var(--primary-color)'}} />
-            <p style={{color: 'white', fontWeight: 'bold'}}>{loadingMessage}</p>
-          </div>
-        </div>
-      )}
 
-      {isProfileModalOpen && (
-        <div style={{
-          position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', zIndex: 1000
-        }}>
-          <div style={{
-            backgroundColor: 'var(--bg-card)', padding: '2rem', borderRadius: '1.5rem',
-            width: '100%', maxWidth: '400px', border: '1px solid var(--primary-color)'
-          }}>
-            <h2 style={{color: 'white', marginBottom: '1rem', fontSize: '1.5rem', fontWeight: 'bold'}}>Medical Profile</h2>
-            <div style={{marginBottom: '1rem'}}>
-              <label style={{display: 'block', color: 'var(--text-muted)', marginBottom: '0.5rem'}}>Blood Group</label>
-              <input 
-                type="text" 
-                value={profileForm.bloodGroup} 
-                onChange={(e) => setProfileForm({...profileForm, bloodGroup: e.target.value})}
-                style={{width: '100%', padding: '0.8rem', borderRadius: '0.5rem', backgroundColor: 'rgba(15,23,42,0.5)', color: 'white', border: '1px solid var(--border-color)'}}
-                placeholder="e.g. O+"
-              />
-            </div>
-            <div style={{marginBottom: '1.5rem'}}>
-              <label style={{display: 'block', color: 'var(--text-muted)', marginBottom: '0.5rem'}}>Medical Notes / Conditions</label>
-              <textarea 
-                value={profileForm.medicalNotes} 
-                onChange={(e) => setProfileForm({...profileForm, medicalNotes: e.target.value})}
-                style={{width: '100%', padding: '0.8rem', borderRadius: '0.5rem', backgroundColor: 'rgba(15,23,42,0.5)', color: 'white', border: '1px solid var(--border-color)', minHeight: '80px', resize: 'none'}}
-                placeholder="Allergies, chronic conditions..."
-              />
-            </div>
-            <div style={{display: 'flex', gap: '1rem'}}>
-              <button onClick={() => setIsProfileModalOpen(false)} style={{flex: 1, padding: '0.8rem', borderRadius: '0.5rem', backgroundColor: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-color)', cursor: 'pointer'}}>Cancel</button>
-              <button onClick={saveProfile} style={{flex: 1, padding: '0.8rem', borderRadius: '0.5rem', backgroundColor: 'var(--primary-color)', color: 'black', fontWeight: 'bold', border: 'none', cursor: 'pointer'}}>Save Profile</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Tracker UI - Click to open Live Map */}
-      {rescueTeamLocation && currentSosId && (
-        <div 
-          onClick={() => setShowMap(true)}
-          style={{
-            position: 'fixed', bottom: '2rem', left: '50%', transform: 'translateX(-50%)',
-            backgroundColor: 'var(--bg-card)', padding: '1rem 1.5rem', borderRadius: '1rem',
-            border: '1px solid var(--success-color)', boxShadow: '0 0 20px rgba(16,185,129,0.5)',
-            display: 'flex', alignItems: 'center', gap: '1rem', zIndex: 500, width: '90%', maxWidth: '400px',
-            cursor: 'pointer'
-          }}
-        >
-          <div style={{backgroundColor: 'rgba(16,185,129,0.2)', padding: '0.8rem', borderRadius: '50%', color: 'var(--success-color)'}}>
-            <Activity className="animate-pulse" size={24} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{color: 'var(--success-color)', fontWeight: 'bold', fontSize: '1.1rem'}}>Rescue Team En Route</div>
-            <div style={{color: 'var(--text-muted)', fontSize: '0.8rem'}}>Click here to track live location</div>
-          </div>
-        </div>
-      )}
-
-      {/* Live Map Modal */}
-      {showMap && rescueTeamLocation && location && (
-        <div style={{
-          position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.9)', zIndex: 3000,
-          display: 'flex', flexDirection: 'column'
-        }}>
-          <div style={{ padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'var(--bg-card)', borderBottom: '1px solid var(--success-color)' }}>
-            <h3 style={{ color: 'var(--success-color)', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Activity className="animate-pulse" size={20} /> Live Tracking
-            </h3>
-            <button onClick={() => setShowMap(false)} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer' }}>
-              <X size={24} />
+            <button className="btn-3d-aqua" onClick={handleSendAdditionalMedia} disabled={isSendingMedia}>
+              <Send size={16} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+              {isSendingMedia ? 'Uploading...' : 'Send Additional Details'}
             </button>
           </div>
-          
+        </div>
+      )}
+
+      {showMap && (rescueTeamLocation || location) && (
+        <div style={{
+          position: 'fixed', inset: 0, backgroundColor: 'rgba(10, 37, 64, 0.85)', zIndex: 3000,
+          display: 'flex', flexDirection: 'column'
+        }}>
+          <div style={{
+            padding: '1rem 1.5rem', display: 'flex', justifyContent: 'space-between',
+            alignItems: 'center', background: '#ffffff', borderBottom: '2px solid #059669'
+          }}>
+            <h3 style={{ color: '#059669', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 800 }}>
+              <Activity size={20} /> Live Rescue Telemetry
+            </h3>
+            <button onClick={() => setShowMap(false)} style={{ background: 'none', border: 'none', color: '#0a2540', cursor: 'pointer' }}>
+              <X size={26} />
+            </button>
+          </div>
+
           <div style={{ flex: 1, position: 'relative' }}>
-            <MapContainer 
-              center={[location.lat, location.lng]} 
-              zoom={14} 
+            <MapContainer
+              center={
+                rescueTeamLocation
+                  ? [rescueTeamLocation.lat, rescueTeamLocation.lng]
+                  : [location.lat, location.lng]
+              }
+              zoom={14}
               style={{ height: '100%', width: '100%' }}
             >
               <TileLayer
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                attribution='&copy; OpenStreetMap contributors'
+                attribution="© OpenStreetMap contributors"
               />
-              
-              {/* ইউজারের লোকেশন */}
-              <Marker position={[location.lat, location.lng]}>
-                <Popup>Your Location</Popup>
-              </Marker>
-              
-              {/* রেসকিউ টিমের লাইভ লোকেশন */}
-              <Marker position={[rescueTeamLocation.lat, rescueTeamLocation.lng]} icon={rescueIcon}>
-                <Popup>Rescue Team</Popup>
-              </Marker>
+              {location && (
+                <Marker position={[location.lat, location.lng]}>
+                  <Popup>Your Location</Popup>
+                </Marker>
+              )}
+              {rescueTeamLocation && (
+                <Marker position={[rescueTeamLocation.lat, rescueTeamLocation.lng]} icon={rescueIcon}>
+                  <Popup>Rescue Team Live Position</Popup>
+                </Marker>
+              )}
             </MapContainer>
           </div>
         </div>

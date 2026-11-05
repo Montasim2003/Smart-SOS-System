@@ -1,11 +1,29 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, Phone, MessageSquare, Clock, AlertCircle, User, Activity, LogOut, Trash2 } from 'lucide-react';
+import { io } from 'socket.io-client';
+import {
+  MapPin, Phone, MessageSquare, Clock, AlertCircle,
+  User, Activity, LogOut, Trash2, ShieldAlert, ExternalLink
+} from 'lucide-react';
+import { Sky3DScene } from '../App';
 
-const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:5000' : 'https://smart-sos-system.onrender.com';
+const API_URL = window.location.hostname === 'localhost'
+  ? 'http://localhost:5000'
+  : 'https://smart-sos-system.onrender.com';
 
-export default function ProviderDashboard({ socket }) {
+const fallbackSocket = io(API_URL, {
+  transports: ['polling', 'websocket'],
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 1000,
+  timeout: 20000
+});
+
+export default function ProviderDashboard({ socket: propSocket }) {
+  const activeSocket = propSocket || fallbackSocket;
+
   const [emergencies, setEmergencies] = useState([]);
+  const [selectedSosId, setSelectedSosId] = useState(null);
   const [providerInfo, setProviderInfo] = useState(null);
   const [activeTab, setActiveTab] = useState('pending');
   const navigate = useNavigate();
@@ -29,59 +47,78 @@ export default function ProviderDashboard({ socket }) {
   };
 
   useEffect(() => {
-    if (!serviceType) return;
+    if (!serviceType || !activeSocket) return;
 
     const playAlarm = () => {
       try {
         const audio = new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU');
         audio.play().catch(e => console.log('Audio play failed', e));
-      } catch (e) { }
+      } catch (e) {}
     };
 
-    socket.emit('get_emergencies');
+    activeSocket.emit('get_emergencies');
 
-    socket.on('sync_emergencies', (data) => {
+    const handleSync = (data) => {
       setEmergencies(data);
-    });
+    };
 
-    socket.on('new_emergency', (data) => {
-      if (data.service === serviceType || data.service === 'General SOS') {
+    const handleNewEmergency = (data) => {
+      if (
+        data.service === serviceType ||
+        data.service === 'General SOS' ||
+        data.service === 'All Emergency'
+      ) {
         playAlarm();
       }
       setEmergencies((prev) => [data, ...prev]);
-    });
+    };
 
-    socket.on('update_emergency', (data) => {
-      setEmergencies((prev) => prev.map(emp =>
-        emp.id === data.id
-          ? { ...emp, message: data.message, voiceUrl: data.voiceUrl || emp.voiceUrl, videoUrl: data.videoUrl || emp.videoUrl }
-          : emp
-      ));
-    });
+    const handleUpdateEmergency = (data) => {
+      setEmergencies((prev) =>
+        prev.map((emp) =>
+          emp.id === data.id
+            ? {
+                ...emp,
+                message: data.message,
+                voiceUrl: data.voiceUrl || emp.voiceUrl,
+                videoUrl: data.videoUrl || emp.videoUrl
+              }
+            : emp
+        )
+      );
+    };
 
-    socket.on('update_emergency_status', (data) => {
-      setEmergencies((prev) => prev.map(emp =>
-        emp.id === data.id ? { ...emp, status: data.status } : emp
-      ));
-    });
+    const handleUpdateStatus = (data) => {
+      setEmergencies((prev) =>
+        prev.map((emp) => (emp.id === data.id ? { ...emp, status: data.status } : emp))
+      );
+    };
 
-    socket.on('update_emergency_location', (data) => {
-      setEmergencies((prev) => prev.map(emp =>
-        emp.id === data.id ? { ...emp, location: data.location } : emp
-      ));
-    });
+    const handleUpdateLocation = (data) => {
+      setEmergencies((prev) =>
+        prev.map((emp) => (emp.id === data.id ? { ...emp, location: data.location } : emp))
+      );
+    };
 
-    socket.on('sos_deleted', (data) => {
-      setEmergencies((prev) => prev.filter(e => e.id !== data.id));
-    });
+    const handleDeleted = (data) => {
+      setEmergencies((prev) => prev.filter((e) => e.id !== data.id));
+    };
+
+    activeSocket.on('sync_emergencies', handleSync);
+    activeSocket.on('new_emergency', handleNewEmergency);
+    activeSocket.on('update_emergency', handleUpdateEmergency);
+    activeSocket.on('update_emergency_status', handleUpdateStatus);
+    activeSocket.on('update_emergency_location', handleUpdateLocation);
+    activeSocket.on('sos_deleted', handleDeleted);
 
     return () => {
-      socket.off('sync_emergencies');
-      socket.off('new_emergency');
-      socket.off('update_emergency');
-      socket.off('update_emergency_status');
-      socket.off('update_emergency_location');
-      socket.off('sos_deleted');
+      activeSocket.off('sync_emergencies', handleSync);
+      activeSocket.off('new_emergency', handleNewEmergency);
+      activeSocket.off('update_emergency', handleUpdateEmergency);
+      activeSocket.off('update_emergency_status', handleUpdateStatus);
+      activeSocket.off('update_emergency_location', handleUpdateLocation);
+      activeSocket.off('sos_deleted', handleDeleted);
+
       if (trackerRef.current) {
         if (navigator.geolocation) {
           navigator.geolocation.clearWatch(trackerRef.current);
@@ -90,113 +127,321 @@ export default function ProviderDashboard({ socket }) {
         }
       }
     };
-  }, [socket, serviceType]);
+  }, [activeSocket, serviceType]);
 
   const handleAccept = (sosId) => {
-    socket.emit('accept_sos', { id: sosId });
+    activeSocket.emit('accept_sos', { id: sosId });
     setEmergencies((prev) =>
-      prev.map(e => e.id === sosId ? { ...e, status: 'Dispatched' } : e)
+      prev.map((e) => (e.id === sosId ? { ...e, status: 'Dispatched' } : e))
     );
 
     if (navigator.geolocation) {
       trackerRef.current = navigator.geolocation.watchPosition(
         (position) => {
           const { latitude, longitude } = position.coords;
-          socket.emit('provider_location_update', { 
-            id: sosId, 
-            location: { lat: latitude, lng: longitude } 
+          activeSocket.emit('provider_location_update', {
+            id: sosId,
+            location: { lat: latitude, lng: longitude }
           });
         },
-        (error) => {
-          console.error("Error getting location:", error);
-          alert("Please enable GPS/Location to share live tracking with the victim.");
+        () => {
+          alert('Please enable GPS/Location to share live tracking with the victim.');
         },
         { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
       );
     } else {
-      alert("Geolocation is not supported by this browser.");
+      alert('Geolocation is not supported by this browser.');
     }
   };
 
   const handleDelete = (sosId) => {
     if (window.confirm('Are you sure you want to delete this SOS alert?')) {
-      socket.emit('delete_sos', { id: sosId });
-      setEmergencies((prev) => prev.filter(e => e.id !== sosId));
+      activeSocket.emit('delete_sos', { id: sosId });
+      setEmergencies((prev) => prev.filter((e) => e.id !== sosId));
+      if (selectedSosId === sosId) setSelectedSosId(null);
     }
   };
 
   if (!providerInfo) return null;
 
-  const filteredEmergencies = emergencies.filter(e => e.service === serviceType || e.service === 'General SOS');
-  const pendingEmergencies = filteredEmergencies.filter(e => e.status !== 'Dispatched');
-  const acceptedEmergencies = filteredEmergencies.filter(e => e.status === 'Dispatched');
+  const filteredEmergencies = emergencies.filter(
+    (e) =>
+      e.service === serviceType ||
+      e.service === 'General SOS' ||
+      e.service === 'All Emergency'
+  );
+  const pendingEmergencies = filteredEmergencies.filter((e) => e.status !== 'Dispatched');
+  const acceptedEmergencies = filteredEmergencies.filter((e) => e.status === 'Dispatched');
 
-  const displayedEmergencies = activeTab === 'pending' ? pendingEmergencies : acceptedEmergencies;
+  const displayedEmergencies =
+    activeTab === 'pending' ? pendingEmergencies : acceptedEmergencies;
+
+  const activeSos =
+    displayedEmergencies.find((e) => e.id === selectedSosId) ||
+    displayedEmergencies[0] ||
+    null;
 
   return (
-    <div className="dashboard-container">
-      <header className="dashboard-header">
-        <div className="dashboard-title">
-          <Activity size={32} />
+    <div className="provider-sky-page">
+      <Sky3DScene />
+
+      <style>{`
+        .provider-sky-page {
+          min-height: 100vh;
+          width: 100%;
+          padding: 1.5rem 2rem;
+          position: relative;
+          z-index: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 1.5rem;
+        }
+        .cmd-header-sky {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 1rem;
+          padding: 1.2rem 1.8rem;
+          border-radius: 28px;
+          background: linear-gradient(145deg, rgba(255, 255, 255, 0.95), rgba(228, 242, 255, 0.92));
+          backdrop-filter: blur(20px);
+          border: 2.5px solid #ffffff;
+          box-shadow: 0 20px 45px rgba(45, 105, 175, 0.25), inset 0 2px 5px #ffffff;
+        }
+        .cmd-grid-sky {
+          display: grid;
+          grid-template-columns: 360px 1fr;
+          gap: 1.6rem;
+          flex: 1;
+          min-height: calc(100vh - 165px);
+        }
+        @media (max-width: 960px) {
+          .cmd-grid-sky {
+            grid-template-columns: 1fr;
+          }
+        }
+        .panel-sky-3d {
+          background: linear-gradient(155deg, rgba(255, 255, 255, 0.94), rgba(228, 243, 255, 0.9));
+          backdrop-filter: blur(22px);
+          border-radius: 30px;
+          border: 2.5px solid #ffffff;
+          box-shadow: 0 22px 50px rgba(45, 105, 175, 0.26), inset 0 2px 5px #ffffff;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
+        .tab-bar-sky {
+          display: flex;
+          gap: 0.75rem;
+          padding: 1rem;
+          background: rgba(215, 235, 255, 0.55);
+          border-bottom: 1.5px solid rgba(0, 102, 255, 0.12);
+        }
+        .tab-btn-sky {
+          flex: 1;
+          padding: 0.82rem 1rem;
+          border-radius: 16px;
+          border: 1.5px solid #ffffff;
+          background: linear-gradient(145deg, #ffffff, #e1effe);
+          color: #1e3a8a;
+          font-weight: 800;
+          font-size: 0.9rem;
+          cursor: pointer;
+          transition: all 0.25s ease;
+          box-shadow: 4px 6px 14px rgba(80, 130, 190, 0.25), -3px -3px 8px #ffffff;
+        }
+        .tab-btn-sky.active-pending {
+          background: linear-gradient(135deg, #0088ff 0%, #0044cc 100%);
+          color: #ffffff;
+          border-color: #ffffff;
+          box-shadow: 0 8px 20px rgba(0, 85, 225, 0.38), inset 0 2px 3px rgba(255, 255, 255, 0.5);
+        }
+        .tab-btn-sky.active-accepted {
+          background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+          color: #ffffff;
+          border-color: #ffffff;
+          box-shadow: 0 8px 20px rgba(5, 150, 105, 0.35), inset 0 2px 3px rgba(255, 255, 255, 0.5);
+        }
+        .queue-item-sky {
+          margin: 0.8rem 1rem 0;
+          padding: 1.1rem 1.25rem;
+          border-radius: 22px;
+          background: linear-gradient(145deg, #ffffff, #e6f2ff);
+          border: 2px solid #ffffff;
+          box-shadow: 6px 10px 22px rgba(65, 120, 185, 0.22), -4px -4px 12px #ffffff;
+          cursor: pointer;
+          transition: all 0.25s ease;
+        }
+        .queue-item-sky:hover, .queue-item-sky.selected {
+          transform: translateY(-3px);
+          border-color: #0077ff;
+          box-shadow: 10px 14px 28px rgba(45, 105, 180, 0.34), 0 0 18px rgba(0, 119, 255, 0.2);
+        }
+        .badge-sky {
+          padding: 0.32rem 0.8rem;
+          border-radius: 999px;
+          font-size: 0.74rem;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+        .badge-sky.pending {
+          background: #ffe4e6;
+          color: #be123c;
+          border: 1.5px solid #fda4af;
+        }
+        .badge-sky.dispatched {
+          background: #d1fae5;
+          color: #047857;
+          border: 1.5px solid #6ee7b7;
+        }
+        .subcard-sky {
+          background: linear-gradient(145deg, #ffffff, #e8f3ff);
+          border-radius: 24px;
+          padding: 1.45rem;
+          border: 2px solid #ffffff;
+          box-shadow: 10px 14px 28px rgba(65, 120, 185, 0.22), -6px -6px 16px #ffffff;
+        }
+        .btn-dispatch-sky {
+          padding: 0.88rem 1.55rem;
+          border-radius: 16px;
+          border: none;
+          cursor: pointer;
+          font-weight: 800;
+          font-size: 0.92rem;
+          color: #ffffff;
+          background: linear-gradient(135deg, #10b981 0%, #047857 100%);
+          box-shadow: 0 10px 22px rgba(5, 150, 105, 0.35), inset 0 2px 4px rgba(255, 255, 255, 0.5);
+          transition: all 0.25s ease;
+        }
+        .btn-dispatch-sky:hover {
+          transform: translateY(-2px) scale(1.02);
+          box-shadow: 0 14px 28px rgba(5, 150, 105, 0.5);
+        }
+        .btn-delete-sky {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.45rem;
+          padding: 0.88rem 1.25rem;
+          border-radius: 16px;
+          cursor: pointer;
+          font-weight: 800;
+          color: #be123c;
+          background: linear-gradient(145deg, #fff1f2, #ffe4e6);
+          border: 1.5px solid #fda4af;
+          box-shadow: 6px 8px 18px rgba(190, 18, 60, 0.15);
+          transition: all 0.2s ease;
+        }
+        .btn-delete-sky:hover {
+          background: #fecdd3;
+          transform: translateY(-2px);
+        }
+        .media-grid-sky {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+          gap: 1.2rem;
+        }
+        .media-frame-sky {
+          border-radius: 20px;
+          overflow: hidden;
+          border: 3px solid #ffffff;
+          box-shadow: 10px 14px 28px rgba(55, 110, 175, 0.28);
+          background: #dbeafe;
+        }
+        .media-frame-sky img {
+          width: 100%;
+          height: 220px;
+          object-fit: cover;
+          display: block;
+        }
+      `}</style>
+
+      <header className="cmd-header-sky">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1.1rem' }}>
+          <div className="orb-icon-3d" style={{ width: '58px', height: '58px', margin: 0, padding: '6px' }}>
+            <div className="orb-icon-inner">
+              <Activity size={26} />
+            </div>
+          </div>
           <div>
-            <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{providerInfo.serviceName}</div>
-            <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>{serviceType} Command Center</div>
+            <div className="title-gradient-3d" style={{ fontSize: '1.55rem' }}>
+              {providerInfo.serviceName}
+            </div>
+            <div style={{ fontSize: '0.9rem', color: '#0052cc', fontWeight: 800 }}>
+              {serviceType} 3D Command Center
+            </div>
           </div>
         </div>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--success-color)', fontWeight: 'bold', backgroundColor: 'rgba(16, 185, 129, 0.1)', padding: '0.5rem 1rem', borderRadius: '2rem' }}>
-            <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: 'var(--success-color)', display: 'inline-block' }}></span>
-            ONLINE
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '0.55rem',
+            color: '#047857', fontWeight: '800', fontSize: '0.84rem',
+            backgroundColor: '#d1fae5',
+            border: '1.5px solid #34d399',
+            padding: '0.55rem 1.15rem', borderRadius: '999px',
+            boxShadow: '0 6px 16px rgba(5, 150, 105, 0.2)'
+          }}>
+            <span style={{
+              width: '10px', height: '10px', borderRadius: '50%',
+              backgroundColor: '#059669', boxShadow: '0 0 8px #059669',
+              display: 'inline-block'
+            }} />
+            RADAR ONLINE
           </div>
-          <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} onClick={handleLogout}>
-            <LogOut size={18} /> Logout
+
+          <button className="pill-btn-3d" onClick={handleLogout} style={{ padding: '0.6rem 1.15rem' }}>
+            <LogOut size={17} /> Logout
           </button>
         </div>
       </header>
 
-      <div className="dashboard-content">
-        <div className="emergency-list">
-          <div className="list-header" style={{ display: 'flex', gap: '1rem' }}>
+      <div className="cmd-grid-sky">
+        <div className="panel-sky-3d">
+          <div className="tab-bar-sky">
             <button
               onClick={() => setActiveTab('pending')}
-              style={{
-                flex: 1, padding: '1rem', background: activeTab === 'pending' ? 'rgba(59,130,246,0.2)' : 'transparent',
-                color: activeTab === 'pending' ? '#3b82f6' : 'var(--text-muted)', fontWeight: 'bold',
-                borderBottom: activeTab === 'pending' ? '2px solid #3b82f6' : 'none'
-              }}
+              className={`tab-btn-sky ${activeTab === 'pending' ? 'active-pending' : ''}`}
             >
               Pending ({pendingEmergencies.length})
             </button>
             <button
               onClick={() => setActiveTab('accepted')}
-              style={{
-                flex: 1, padding: '1rem', background: activeTab === 'accepted' ? 'rgba(16,185,129,0.2)' : 'transparent',
-                color: activeTab === 'accepted' ? 'var(--success-color)' : 'var(--text-muted)', fontWeight: 'bold',
-                borderBottom: activeTab === 'accepted' ? '2px solid var(--success-color)' : 'none'
-              }}
+              className={`tab-btn-sky ${activeTab === 'accepted' ? 'active-accepted' : ''}`}
             >
               Accepted ({acceptedEmergencies.length})
             </button>
           </div>
 
-          <div className="list-items">
+          <div style={{ flex: 1, overflowY: 'auto', paddingBottom: '1rem' }}>
             {displayedEmergencies.length === 0 ? (
-              <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                <Clock size={48} style={{ margin: '0 auto 1rem', opacity: 0.5 }} />
-                <p>No emergencies in this category.</p>
+              <div style={{ padding: '3.5rem 1.5rem', textAlign: 'center', color: '#1e40af' }}>
+                <Clock size={46} style={{ margin: '0 auto 1rem', color: '#0066ff' }} />
+                <p style={{ fontWeight: 800, fontSize: '0.96rem' }}>No emergencies in this category.</p>
               </div>
             ) : (
-              displayedEmergencies.map(sos => (
-                <div key={sos.id} className="emergency-item">
-                  <div className="emergency-item-header">
-                    <div style={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <AlertCircle size={16} color={sos.status === 'Pending' ? 'var(--danger-color)' : 'var(--success-color)'} />
-                      SOS Alert
+              displayedEmergencies.map((sos) => (
+                <div
+                  key={sos.id}
+                  onClick={() => setSelectedSosId(sos.id)}
+                  className={`queue-item-sky ${activeSos?.id === sos.id ? 'selected' : ''}`}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                    <div style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#062863' }}>
+                      <AlertCircle
+                        size={18}
+                        color={sos.status === 'Pending' ? '#e11d48' : '#059669'}
+                      />
+                      {sos.service || 'SOS Alert'}
                     </div>
-                    <span className={`badge ${sos.status === 'Pending' ? 'pending' : 'dispatched'}`}>{sos.status}</span>
+                    <span className={`badge-sky ${sos.status === 'Pending' ? 'pending' : 'dispatched'}`}>
+                      {sos.status}
+                    </span>
                   </div>
-                  <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-                    {new Date(sos.timestamp || sos.createdAt || Date.now()).toLocaleTimeString()}
+                  <div style={{ fontSize: '0.85rem', color: '#1e40af', fontWeight: 700, display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{sos.profile?.username || sos.profile?.name || 'Victim'}</span>
+                    <span>{new Date(sos.timestamp || sos.createdAt || Date.now()).toLocaleTimeString()}</span>
                   </div>
                 </div>
               ))
@@ -204,118 +449,236 @@ export default function ProviderDashboard({ socket }) {
           </div>
         </div>
 
-        <div className="emergency-detail">
-          {displayedEmergencies.length > 0 ? (
-            (() => {
-              const sos = displayedEmergencies[0];
-              return (
+        <div className="panel-sky-3d" style={{ padding: '1.8rem', overflowY: 'auto' }}>
+          {activeSos ? (
+            <div>
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                flexWrap: 'wrap', gap: '1rem', paddingBottom: '1.4rem',
+                marginBottom: '1.6rem', borderBottom: '1.5px solid rgba(0, 102, 255, 0.14)'
+              }}>
                 <div>
-                  <div className="detail-header">
-                    <div>
-                      <h2 style={{ fontSize: '2rem', color: sos.status === 'Pending' ? 'var(--danger-color)' : 'var(--success-color)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <AlertCircle /> SOS ALERT {sos.status === 'Dispatched' && '(HANDLED)'}
-                      </h2>
-                      <span style={{ color: 'var(--text-muted)' }}>{new Date(sos.timestamp || sos.createdAt || Date.now()).toLocaleString()}</span>
-                    </div>
-                    <div style={{ display: 'flex', gap: '1rem' }}>
-                      {sos.status === 'Pending' && (
-                        <button className="btn-provider" onClick={() => handleAccept(sos.id)}>
-                          ACCEPT & DISPATCH TEAM
-                        </button>
-                      )}
-                      <button className="btn-secondary" style={{ backgroundColor: 'rgba(239, 68, 68, 0.2)', color: 'var(--danger-color)', border: '1px solid var(--danger-color)' }} onClick={() => handleDelete(sos.id)}>
-                        <Trash2 size={20} /> DELETE
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="info-grid">
-                    <div className="info-card">
-                      <h3><User size={20} /> Victim Details</h3>
-                      {sos.profile ? (
-                        <>
-                          <div style={{ fontWeight: 'bold', fontSize: '1.2rem', marginBottom: '0.5rem' }}>{sos.profile.username || sos.profile.name}</div>
-                          {sos.profile.email && <div style={{ color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Email: {sos.profile.email}</div>}
-                          {sos.profile.phone && <div style={{ color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Phone: {sos.profile.phone}</div>}
-                          {sos.profile.bloodGroup && <div style={{ color: 'var(--danger-color)', fontWeight: 'bold', marginBottom: '0.5rem' }}>Blood Group: {sos.profile.bloodGroup}</div>}
-                          {sos.profile.medicalNotes && <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem', backgroundColor: 'rgba(0,0,0,0.3)', padding: '0.5rem', borderRadius: '0.5rem' }}>Notes: {sos.profile.medicalNotes}</div>}
-                        </>
-                      ) : (
-                        <div style={{ color: 'var(--text-muted)' }}>No profile data provided.</div>
-                      )}
-                    </div>
-
-                    <div className="info-card">
-                      <h3><MapPin size={20} /> Live Coordinates</h3>
-                      {sos.location && sos.location.lat ? (
-                        <>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', backgroundColor: 'rgba(0,0,0,0.3)', padding: '0.5rem', borderRadius: '0.5rem' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>LAT</span>
-                            <span style={{ color: 'var(--success-color)', fontWeight: 'bold', fontFamily: 'monospace' }}>{sos.location.lat.toFixed(6)}</span>
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', backgroundColor: 'rgba(0,0,0,0.3)', padding: '0.5rem', borderRadius: '0.5rem' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>LNG</span>
-                            <span style={{ color: 'var(--success-color)', fontWeight: 'bold', fontFamily: 'monospace' }}>{sos.location.lng.toFixed(6)}</span>
-                          </div>
-                          <a href={`https://www.google.com/maps?q=${sos.location.lat},${sos.location.lng}`} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', color: '#3b82f6', textDecoration: 'underline' }}>
-                            Open in Google Maps
-                          </a>
-                        </>
-                      ) : (
-                        <div style={{ color: 'var(--text-muted)' }}>Acquiring GPS Signal...</div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div style={{ marginTop: '2rem' }}>
-                    <h3 style={{ color: 'white', marginBottom: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>Media Evidence</h3>
-
-                    <div className="media-grid">
-                      {sos.photoFrontUrl && (
-                        <div className="media-box">
-                          <img src={sos.photoFrontUrl.startsWith('data:') ? sos.photoFrontUrl : `${API_URL}${sos.photoFrontUrl}`} alt="Front" />
-                        </div>
-                      )}
-                      {sos.photoBackUrl && (
-                        <div className="media-box">
-                          <img src={sos.photoBackUrl.startsWith('data:') ? sos.photoBackUrl : `${API_URL}${sos.photoBackUrl}`} alt="Back" />
-                        </div>
-                      )}
-                      {sos.photoUrl && !sos.photoFrontUrl && !sos.photoBackUrl && (
-                        <div className="media-box">
-                          <img src={sos.photoUrl.startsWith('data:') ? sos.photoUrl : `${API_URL}${sos.photoUrl}`} alt="Snapshot" />
-                        </div>
-                      )}
-                    </div>
-
-                    {sos.message && (
-                      <div className="info-card" style={{ marginTop: '1rem' }}>
-                        <h3><MessageSquare size={20} /> Message</h3>
-                        <p>{sos.message}</p>
-                      </div>
-                    )}
-
-                    {sos.voiceUrl && (
-                      <div className="info-card" style={{ marginTop: '1rem' }}>
-                        <h3><Phone size={20} /> Voice Note</h3>
-                        <audio controls src={`${API_URL}${sos.voiceUrl}`} style={{ width: '100%' }} />
-                      </div>
-                    )}
-
-                    {sos.videoUrl && (
-                      <div className="info-card" style={{ marginTop: '1rem' }}>
-                        <h3><Activity size={20} /> Video Footage</h3>
-                        <video controls src={`${API_URL}${sos.videoUrl}`} style={{ width: '100%', maxHeight: '300px', backgroundColor: 'black' }} />
-                      </div>
-                    )}
-                  </div>
-
+                  <h2 style={{
+                    fontSize: '1.8rem',
+                    fontWeight: 800,
+                    color: activeSos.status === 'Pending' ? '#e11d48' : '#059669',
+                    marginBottom: '0.35rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.6rem'
+                  }}>
+                    <ShieldAlert size={28} />
+                    SOS ALERT {activeSos.status === 'Dispatched' && '(DISPATCHED)'}
+                  </h2>
+                  <span style={{ color: '#1e40af', fontSize: '0.92rem', fontWeight: 700 }}>
+                    Triggered: {new Date(activeSos.timestamp || activeSos.createdAt || Date.now()).toLocaleString()}
+                  </span>
                 </div>
-              );
-            })()
+
+                <div style={{ display: 'flex', gap: '0.9rem', flexWrap: 'wrap' }}>
+                  {activeSos.status === 'Pending' && (
+                    <button className="btn-dispatch-sky" onClick={() => handleAccept(activeSos.id)}>
+                      ACCEPT & DISPATCH TEAM
+                    </button>
+                  )}
+                  <button className="btn-delete-sky" onClick={() => handleDelete(activeSos.id)}>
+                    <Trash2 size={18} /> DELETE
+                  </button>
+                </div>
+              </div>
+
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                gap: '1.4rem'
+              }}>
+                <div className="subcard-sky">
+                  <h3 className="title-gradient-3d" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', fontSize: '1.1rem' }}>
+                    <User size={20} color="#0052d4" /> Victim Details
+                  </h3>
+                  {activeSos.profile ? (
+                    <>
+                      <div style={{ fontWeight: '800', fontSize: '1.3rem', marginBottom: '0.7rem', color: '#062863' }}>
+                        {activeSos.profile.username || activeSos.profile.name}
+                      </div>
+
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', marginBottom: '0.85rem' }}>
+                        {activeSos.profile.bloodGroup && (
+                          <span style={{
+                            padding: '0.38rem 0.85rem',
+                            borderRadius: '10px',
+                            background: '#ffe4e6',
+                            border: '1.5px solid #fda4af',
+                            color: '#be123c',
+                            fontWeight: '800',
+                            fontSize: '0.86rem'
+                          }}>
+                            Blood Group: {activeSos.profile.bloodGroup}
+                          </span>
+                        )}
+
+                        {activeSos.profile.phone && (
+                          <a
+                            href={`tel:${activeSos.profile.phone}`}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              padding: '0.38rem 0.85rem',
+                              borderRadius: '10px',
+                              background: '#dbeafe',
+                              border: '1.5px solid #93c5fd',
+                              color: '#0052cc',
+                              fontWeight: '800',
+                              fontSize: '0.86rem',
+                              textDecoration: 'none'
+                            }}
+                          >
+                            <Phone size={14} /> {activeSos.profile.phone}
+                          </a>
+                        )}
+                      </div>
+
+                      {activeSos.profile.medicalNotes && (
+                        <div style={{
+                          color: '#0a2540',
+                          fontSize: '0.92rem',
+                          fontWeight: 600,
+                          backgroundColor: '#f0f7ff',
+                          padding: '0.8rem',
+                          borderRadius: '14px',
+                          border: '1.5px solid #bfdbfe'
+                        }}>
+                          <strong style={{ color: '#0052cc' }}>Medical Notes:</strong> {activeSos.profile.medicalNotes}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ color: '#1e40af', fontWeight: 700 }}>No profile data provided.</div>
+                  )}
+                </div>
+
+                <div className="subcard-sky">
+                  <h3 className="title-gradient-3d" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', fontSize: '1.1rem' }}>
+                    <MapPin size={20} color="#0052d4" /> Live Coordinates
+                  </h3>
+                  {activeSos.location && activeSos.location.lat ? (
+                    <>
+                      <div style={{
+                        display: 'flex', justifyContent: 'space-between', marginBottom: '0.6rem',
+                        backgroundColor: '#f0f7ff', padding: '0.7rem 0.95rem',
+                        borderRadius: '12px', border: '1.5px solid #bfdbfe'
+                      }}>
+                        <span style={{ color: '#1e40af', fontWeight: 800 }}>LATITUDE</span>
+                        <span style={{ color: '#047857', fontWeight: '800', fontFamily: 'monospace', fontSize: '1rem' }}>
+                          {Number(activeSos.location.lat).toFixed(6)}
+                        </span>
+                      </div>
+                      <div style={{
+                        display: 'flex', justifyContent: 'space-between', marginBottom: '1.1rem',
+                        backgroundColor: '#f0f7ff', padding: '0.7rem 0.95rem',
+                        borderRadius: '12px', border: '1.5px solid #bfdbfe'
+                      }}>
+                        <span style={{ color: '#1e40af', fontWeight: 800 }}>LONGITUDE</span>
+                        <span style={{ color: '#047857', fontWeight: '800', fontFamily: 'monospace', fontSize: '1rem' }}>
+                          {Number(activeSos.location.lng).toFixed(6)}
+                        </span>
+                      </div>
+                      <a
+                        href={`https://www.google.com/maps?q=${activeSos.location.lat},${activeSos.location.lng}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn-3d-aqua"
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          gap: '0.5rem', textDecoration: 'none', padding: '0.78rem'
+                        }}
+                      >
+                        <ExternalLink size={17} /> Open in Google Maps
+                      </a>
+                    </>
+                  ) : (
+                    <div style={{ color: '#1e40af', fontWeight: 700 }}>Acquiring GPS Signal...</div>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ marginTop: '2rem' }}>
+                <h3 className="title-gradient-3d" style={{
+                  marginBottom: '1.2rem',
+                  borderBottom: '1.5px solid rgba(0, 102, 255, 0.14)',
+                  paddingBottom: '0.6rem',
+                  fontSize: '1.22rem'
+                }}>
+                  Live Media Evidence
+                </h3>
+
+                <div className="media-grid-sky">
+                  {activeSos.photoFrontUrl && (
+                    <div className="media-frame-sky">
+                      <img
+                        src={activeSos.photoFrontUrl.startsWith('data:') ? activeSos.photoFrontUrl : `${API_URL}${activeSos.photoFrontUrl}`}
+                        alt="Front Camera"
+                      />
+                    </div>
+                  )}
+                  {activeSos.photoBackUrl && (
+                    <div className="media-frame-sky">
+                      <img
+                        src={activeSos.photoBackUrl.startsWith('data:') ? activeSos.photoBackUrl : `${API_URL}${activeSos.photoBackUrl}`}
+                        alt="Back Camera"
+                      />
+                    </div>
+                  )}
+                  {activeSos.photoUrl && !activeSos.photoFrontUrl && !activeSos.photoBackUrl && (
+                    <div className="media-frame-sky">
+                      <img
+                        src={activeSos.photoUrl.startsWith('data:') ? activeSos.photoUrl : `${API_URL}${activeSos.photoUrl}`}
+                        alt="Snapshot"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {activeSos.message && (
+                  <div className="subcard-sky" style={{ marginTop: '1.2rem' }}>
+                    <h3 className="title-gradient-3d" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.6rem', fontSize: '1.05rem' }}>
+                      <MessageSquare size={18} color="#0052d4" /> Victim Situation Note
+                    </h3>
+                    <p style={{ color: '#0a2540', fontWeight: 600, lineHeight: 1.5 }}>{activeSos.message}</p>
+                  </div>
+                )}
+
+                {activeSos.voiceUrl && (
+                  <div className="subcard-sky" style={{ marginTop: '1.2rem' }}>
+                    <h3 className="title-gradient-3d" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', fontSize: '1.05rem' }}>
+                      <Phone size={18} color="#0052d4" /> Emergency Voice Note
+                    </h3>
+                    <audio controls src={`${API_URL}${activeSos.voiceUrl}`} style={{ width: '100%' }} />
+                  </div>
+                )}
+
+                {activeSos.videoUrl && (
+                  <div className="subcard-sky" style={{ marginTop: '1.2rem' }}>
+                    <h3 className="title-gradient-3d" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', fontSize: '1.05rem' }}>
+                      <Activity size={18} color="#0052d4" /> Emergency Video Footage
+                    </h3>
+                    <video
+                      controls
+                      src={`${API_URL}${activeSos.videoUrl}`}
+                      style={{ width: '100%', maxHeight: '320px', borderRadius: '14px', backgroundColor: '#000' }}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
           ) : (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
-              Select an emergency to view details
+            <div style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              justifyContent: 'center', height: '100%', color: '#1e40af', gap: '0.8rem'
+            }}>
+              <Activity size={48} style={{ color: '#0066ff' }} />
+              <p style={{ fontSize: '1.08rem', fontWeight: 800 }}>Select an emergency alert from the left queue to inspect telemetry</p>
             </div>
           )}
         </div>

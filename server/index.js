@@ -35,7 +35,11 @@ const io = new Server(server, {
     origin: allowedOrigins,
     methods: ['GET', 'POST'],
     credentials: true
-  }
+  },
+  transports: ['polling', 'websocket'], // Mobile data bypass without VPN
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 app.use(cors({
