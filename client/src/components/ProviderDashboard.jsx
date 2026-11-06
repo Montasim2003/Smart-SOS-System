@@ -3,9 +3,29 @@ import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import {
   MapPin, Phone, MessageSquare, Clock, AlertCircle,
-  User, Activity, LogOut, Trash2, ShieldAlert, ExternalLink
+  User, Activity, LogOut, Trash2, ShieldAlert, ExternalLink,
+  Send, Image
 } from 'lucide-react';
+import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
 import { Sky3DScene } from '../App';
+
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
+
+const rescueIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
 
 const API_URL = window.location.hostname === 'localhost'
   ? 'http://localhost:5000'
@@ -26,8 +46,12 @@ export default function ProviderDashboard({ socket: propSocket }) {
   const [selectedSosId, setSelectedSosId] = useState(null);
   const [providerInfo, setProviderInfo] = useState(null);
   const [activeTab, setActiveTab] = useState('pending');
+  const [myLocation, setMyLocation] = useState(null);
+  const [chatText, setChatText] = useState('');
+
   const navigate = useNavigate();
   const trackerRef = useRef(null);
+  const chatEndRef = useRef(null);
 
   useEffect(() => {
     const info = localStorage.getItem('providerInfo');
@@ -35,6 +59,14 @@ export default function ProviderDashboard({ socket: propSocket }) {
       setProviderInfo(JSON.parse(info));
     } else {
       navigate('/provider/login');
+    }
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setMyLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => {},
+        { enableHighAccuracy: true }
+      );
     }
   }, [navigate]);
 
@@ -52,7 +84,7 @@ export default function ProviderDashboard({ socket: propSocket }) {
     const playAlarm = () => {
       try {
         const audio = new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU');
-        audio.play().catch(e => console.log('Audio play failed', e));
+        audio.play().catch(() => {});
       } catch (e) {}
     };
 
@@ -100,6 +132,18 @@ export default function ProviderDashboard({ socket: propSocket }) {
       );
     };
 
+    const handleReceiveChat = (msg) => {
+      setEmergencies((prev) =>
+        prev.map((emp) => {
+          if (emp.id !== msg.sosId) return emp;
+          const existing = emp.chatMessages || [];
+          if (existing.some((m) => m.msgId === msg.msgId)) return emp;
+          return { ...emp, chatMessages: [...existing, msg] };
+        })
+      );
+      setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+    };
+
     const handleDeleted = (data) => {
       setEmergencies((prev) => prev.filter((e) => e.id !== data.id));
     };
@@ -109,6 +153,7 @@ export default function ProviderDashboard({ socket: propSocket }) {
     activeSocket.on('update_emergency', handleUpdateEmergency);
     activeSocket.on('update_emergency_status', handleUpdateStatus);
     activeSocket.on('update_emergency_location', handleUpdateLocation);
+    activeSocket.on('receive_chat_message', handleReceiveChat);
     activeSocket.on('sos_deleted', handleDeleted);
 
     return () => {
@@ -117,14 +162,11 @@ export default function ProviderDashboard({ socket: propSocket }) {
       activeSocket.off('update_emergency', handleUpdateEmergency);
       activeSocket.off('update_emergency_status', handleUpdateStatus);
       activeSocket.off('update_emergency_location', handleUpdateLocation);
+      activeSocket.off('receive_chat_message', handleReceiveChat);
       activeSocket.off('sos_deleted', handleDeleted);
 
-      if (trackerRef.current) {
-        if (navigator.geolocation) {
-          navigator.geolocation.clearWatch(trackerRef.current);
-        } else {
-          clearInterval(trackerRef.current);
-        }
+      if (trackerRef.current && navigator.geolocation) {
+        navigator.geolocation.clearWatch(trackerRef.current);
       }
     };
   }, [activeSocket, serviceType]);
@@ -136,21 +178,24 @@ export default function ProviderDashboard({ socket: propSocket }) {
     );
 
     if (navigator.geolocation) {
+      if (trackerRef.current) {
+        navigator.geolocation.clearWatch(trackerRef.current);
+      }
       trackerRef.current = navigator.geolocation.watchPosition(
         (position) => {
-          const { latitude, longitude } = position.coords;
+          const coords = {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          };
+          setMyLocation(coords);
           activeSocket.emit('provider_location_update', {
             id: sosId,
-            location: { lat: latitude, lng: longitude }
+            location: coords
           });
         },
-        () => {
-          alert('Please enable GPS/Location to share live tracking with the victim.');
-        },
-        { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
       );
-    } else {
-      alert('Geolocation is not supported by this browser.');
     }
   };
 
@@ -160,6 +205,58 @@ export default function ProviderDashboard({ socket: propSocket }) {
       setEmergencies((prev) => prev.filter((e) => e.id !== sosId));
       if (selectedSosId === sosId) setSelectedSosId(null);
     }
+  };
+
+  const handleSendProviderChat = (e, sosId) => {
+    e.preventDefault();
+    if (!chatText.trim() || !sosId) return;
+    activeSocket.emit('send_chat_message', {
+      sosId,
+      senderName: providerInfo?.serviceName || serviceType,
+      senderRole: 'provider',
+      text: chatText.trim(),
+      image: null
+    });
+    setChatText('');
+  };
+
+  const handleSendProviderPhoto = (e, sosId) => {
+    const file = e.target.files?.[0];
+    if (!file || !sosId) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new window.Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const maxDim = 800;
+        let w = img.width;
+        let h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.72);
+        activeSocket.emit('send_chat_message', {
+          sosId,
+          senderName: providerInfo?.serviceName || serviceType,
+          senderRole: 'provider',
+          text: '',
+          image: compressedDataUrl
+        });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   if (!providerInfo) return null;
@@ -211,7 +308,7 @@ export default function ProviderDashboard({ socket: propSocket }) {
         }
         .cmd-grid-sky {
           display: grid;
-          grid-template-columns: 360px 1fr;
+          grid-template-columns: 350px 1fr;
           gap: 1.6rem;
           flex: 1;
           min-height: calc(100vh - 165px);
@@ -560,7 +657,7 @@ export default function ProviderDashboard({ socket: propSocket }) {
 
                 <div className="subcard-sky">
                   <h3 className="title-gradient-3d" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', fontSize: '1.1rem' }}>
-                    <MapPin size={20} color="#0052d4" /> Live Coordinates
+                    <MapPin size={20} color="#0052d4" /> Live Moving Coordinates
                   </h3>
                   {activeSos.location && activeSos.location.lat ? (
                     <>
@@ -600,6 +697,127 @@ export default function ProviderDashboard({ socket: propSocket }) {
                   ) : (
                     <div style={{ color: '#1e40af', fontWeight: 700 }}>Acquiring GPS Signal...</div>
                   )}
+                </div>
+              </div>
+
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+                gap: '1.4rem',
+                marginTop: '1.5rem'
+              }}>
+                <div className="subcard-sky" style={{ display: 'flex', flexDirection: 'column', minHeight: '360px' }}>
+                  <h3 className="title-gradient-3d" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.85rem', fontSize: '1.1rem' }}>
+                    <MapPin size={20} color="#059669" /> Real-Time Live Tracking Map
+                  </h3>
+                  {activeSos.location && activeSos.location.lat ? (
+                    <div style={{ flex: 1, borderRadius: '18px', overflow: 'hidden', border: '2px solid #bfdbfe', minHeight: '280px' }}>
+                      <MapContainer
+                        key={activeSos.id}
+                        center={[activeSos.location.lat, activeSos.location.lng]}
+                        zoom={15}
+                        style={{ height: '100%', width: '100%', minHeight: '280px' }}
+                      >
+                        <TileLayer
+                          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                          attribution="&copy; OpenStreetMap contributors"
+                        />
+                        <Marker position={[activeSos.location.lat, activeSos.location.lng]}>
+                          <Popup>Victim Live Location (Moving)</Popup>
+                        </Marker>
+                        {myLocation && (
+                          <Marker position={[myLocation.lat, myLocation.lng]} icon={rescueIcon}>
+                            <Popup>Your Rescue Unit</Popup>
+                          </Marker>
+                        )}
+                        {myLocation && (
+                          <Polyline
+                            positions={[
+                              [activeSos.location.lat, activeSos.location.lng],
+                              [myLocation.lat, myLocation.lng]
+                            ]}
+                            color="#0066ff"
+                            weight={4}
+                            dashArray="8, 8"
+                          />
+                        )}
+                      </MapContainer>
+                    </div>
+                  ) : (
+                    <div style={{ margin: 'auto', color: '#1e40af', fontWeight: 700 }}>Waiting for live GPS coordinates...</div>
+                  )}
+                </div>
+
+                <div className="subcard-sky" style={{ display: 'flex', flexDirection: 'column', height: '360px' }}>
+                  <h3 className="title-gradient-3d" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', fontSize: '1.1rem' }}>
+                    <MessageSquare size={20} color="#0052d4" /> Live Messenger with Victim
+                  </h3>
+
+                  <div style={{
+                    flex: 1, overflowY: 'auto', padding: '0.6rem', borderRadius: '16px',
+                    background: '#f0f7ff', border: '1.5px solid #bfdbfe',
+                    display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '0.75rem'
+                  }}>
+                    {(!activeSos.chatMessages || activeSos.chatMessages.length === 0) ? (
+                      <div style={{ margin: 'auto', color: '#475569', fontSize: '0.88rem', fontWeight: 600, textAlign: 'center' }}>
+                        No messages yet. Send an update or photo to the victim.
+                      </div>
+                    ) : (
+                      activeSos.chatMessages.map((m) => {
+                        const isProvider = m.senderRole === 'provider';
+                        return (
+                          <div
+                            key={m.msgId}
+                            style={{
+                              alignSelf: isProvider ? 'flex-end' : 'flex-start',
+                              maxWidth: '82%',
+                              padding: '0.6rem 0.85rem',
+                              borderRadius: isProvider ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                              background: isProvider
+                                ? 'linear-gradient(135deg, #0088ff 0%, #0052cc 100%)'
+                                : '#ffffff',
+                              color: isProvider ? '#ffffff' : '#0a2540',
+                              border: isProvider ? 'none' : '1.5px solid #cbd5e1',
+                              boxShadow: '0 3px 10px rgba(0, 82, 204, 0.1)'
+                            }}
+                          >
+                            <div style={{
+                              fontSize: '0.68rem', fontWeight: 800, marginBottom: '0.2rem',
+                              color: isProvider ? '#dbeafe' : '#0052cc'
+                            }}>
+                              {m.senderName} • {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </div>
+                            {m.image && (
+                              <img
+                                src={m.image}
+                                alt="Chat attachment"
+                                style={{ width: '100%', maxHeight: '180px', objectFit: 'cover', borderRadius: '10px', marginBottom: m.text ? '0.35rem' : 0 }}
+                              />
+                            )}
+                            {m.text && <div style={{ fontSize: '0.88rem', fontWeight: 600, wordBreak: 'break-word' }}>{m.text}</div>}
+                          </div>
+                        );
+                      })
+                    )}
+                    <div ref={chatEndRef} />
+                  </div>
+
+                  <form onSubmit={(e) => handleSendProviderChat(e, activeSos.id)} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <label className="pill-btn-3d" style={{ padding: '0.68rem', cursor: 'pointer', marginBottom: 0 }}>
+                      <Image size={18} color="#0052cc" />
+                      <input type="file" accept="image/*" onChange={(e) => handleSendProviderPhoto(e, activeSos.id)} style={{ display: 'none' }} />
+                    </label>
+                    <input
+                      className="input-3d"
+                      style={{ flex: 1, padding: '0.68rem 0.95rem' }}
+                      placeholder="Reply to victim..."
+                      value={chatText}
+                      onChange={(e) => setChatText(e.target.value)}
+                    />
+                    <button type="submit" className="btn-3d-aqua" style={{ width: 'auto', padding: '0.68rem 1rem' }}>
+                      <Send size={16} />
+                    </button>
+                  </form>
                 </div>
               </div>
 
