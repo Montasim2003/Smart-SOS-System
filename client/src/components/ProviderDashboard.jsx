@@ -4,7 +4,7 @@ import { io } from 'socket.io-client';
 import {
   MapPin, Phone, MessageSquare, Clock, AlertCircle,
   User, Activity, LogOut, Trash2, ShieldAlert, ExternalLink,
-  Send, Image
+  Send, Image, ShieldCheck
 } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -29,14 +29,16 @@ const rescueIcon = new L.Icon({
 
 const API_URL = window.location.hostname === 'localhost'
   ? 'http://localhost:5000'
-  : 'https://smart-sos-system.onrender.com';
+  : '';
 
-const fallbackSocket = io(API_URL, {
-  transports: ['polling', 'websocket'],
+const fallbackSocket = io(API_URL || window.location.origin, {
+  path: '/socket.io/',
+  transports: ['polling'],
+  upgrade: false,
   reconnection: true,
   reconnectionAttempts: Infinity,
-  reconnectionDelay: 1000,
-  timeout: 20000
+  reconnectionDelay: 1500,
+  timeout: 30000
 });
 
 export default function ProviderDashboard({ socket: propSocket }) {
@@ -228,7 +230,7 @@ export default function ProviderDashboard({ socket: propSocket }) {
       const img = new window.Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const maxDim = 800;
+        const maxDim = 500;
         let w = img.width;
         let h = img.height;
         if (w > maxDim || h > maxDim) {
@@ -244,7 +246,7 @@ export default function ProviderDashboard({ socket: propSocket }) {
         canvas.height = h;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, w, h);
-        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.72);
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.6);
         activeSocket.emit('send_chat_message', {
           sosId,
           senderName: providerInfo?.serviceName || serviceType,
@@ -600,6 +602,22 @@ export default function ProviderDashboard({ socket: propSocket }) {
                       </div>
 
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', marginBottom: '0.85rem' }}>
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          padding: '0.38rem 0.85rem',
+                          borderRadius: '10px',
+                          background: '#d1fae5',
+                          border: '1.5px solid #34d399',
+                          color: '#047857',
+                          fontWeight: '800',
+                          fontSize: '0.84rem'
+                        }}>
+                          <ShieldCheck size={15} />
+                          NID: {activeSos.profile.nidNumber || 'Verified Citizen'}
+                        </span>
+
                         {activeSos.profile.bloodGroup && (
                           <span style={{
                             padding: '0.38rem 0.85rem',

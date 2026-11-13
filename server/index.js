@@ -20,18 +20,9 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('MongoDB successfully connected!'))
   .catch(err => console.error('MongoDB connection error:', err));
 
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'http://localhost:5174',
-  'http://localhost:5175',
-  'https://smart-sos-system-lf2rtqyfc.vercel.app',
-  'https://smart-sos-system.vercel.app'
-];
-
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: true,
     methods: ['GET', 'POST'],
     credentials: true
   },
@@ -42,12 +33,67 @@ const io = new Server(server, {
   maxHttpBufferSize: 1e7
 });
 
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
 app.use(cors({
-  origin: allowedOrigins,
+  origin: true,
   methods: ['GET', 'POST'],
   credentials: true
 }));
+
 app.use(express.json({ limit: '50mb' }));
+
+const sanitizeObject = (obj) => {
+  if (!obj || typeof obj !== 'object') return obj;
+  for (const key of Object.keys(obj)) {
+    if (key.startsWith('$') || key.includes('.')) {
+      delete obj[key];
+    } else if (typeof obj[key] === 'string') {
+      obj[key] = obj[key]
+        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+        .replace(/javascript:/gi, '');
+    } else if (typeof obj[key] === 'object') {
+      sanitizeObject(obj[key]);
+    }
+  }
+  return obj;
+};
+
+app.use((req, res, next) => {
+  if (req.body) sanitizeObject(req.body);
+  if (req.query) sanitizeObject(req.query);
+  if (req.params) sanitizeObject(req.params);
+  next();
+});
+
+const rateLimitMap = new Map();
+const rateLimiter = (maxRequests, windowMs) => (req, res, next) => {
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip) || { count: 0, resetTime: now + windowMs };
+  if (now > entry.resetTime) {
+    entry.count = 1;
+    entry.resetTime = now + windowMs;
+  } else {
+    entry.count += 1;
+  }
+  rateLimitMap.set(ip, entry);
+  if (entry.count > maxRequests) {
+    return res.status(429).json({
+      success: false,
+      message: 'Too many requests from this device. Please wait a few minutes.'
+    });
+  }
+  next();
+};
+
+app.use('/api/auth', rateLimiter(60, 15 * 60 * 1000));
 
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
@@ -60,23 +106,85 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    const safeExt = path.extname(file.originalname).replace(/[^a-zA-Z0-9.]/g, '') || '.webm';
+    cb(null, file.fieldname + '-' + uniqueSuffix + safeExt);
   }
 });
 
-const upload = multer({ storage });
+const fileFilter = (req, file, cb) => {
+  const allowedMimes = [
+    'audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/wav', 'audio/ogg',
+    'video/webm', 'video/mp4', 'video/quicktime',
+    'image/jpeg', 'image/png', 'image/webp'
+  ];
+  if (allowedMimes.some(type => file.mimetype.startsWith(type.split('/')[0]))) {
+    cb(null, true);
+  } else {
+    cb(new Error('Invalid file type blocked by security filter'), false);
+  }
+};
+
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: 25 * 1024 * 1024 }
+});
 
 app.use('/uploads', express.static(uploadDir));
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_jwt_key';
 
+function isValidBangladeshiNID(nid, dob) {
+  const cleaned = String(nid || '').trim();
+  if (!/^(?:\d{10}|\d{13}|\d{17})$/.test(cleaned)) {
+    return { valid: false, message: 'Invalid NID! Must be a valid 10, 13, or 17 digit Bangladeshi NID number.' };
+  }
+  if (/^(\d)\1+$/.test(cleaned)) {
+    return { valid: false, message: 'Fake repeating digits are not allowed as NID.' };
+  }
+  if (dob && cleaned.length === 17) {
+    const birthYear = new Date(dob).getFullYear().toString();
+    if (birthYear && birthYear.length === 4 && !cleaned.startsWith(birthYear)) {
+      return { valid: false, message: `17-digit NID must start with your birth year (${birthYear}).` };
+    }
+  }
+  return { valid: true, cleaned };
+}
+
+app.get('/api/ping', (req, res) => {
+  res.json({ ok: true });
+});
+
 app.post('/api/auth/user/register', async (req, res) => {
   try {
-    const { username, password } = req.body;
-    let user = await User.findOne({ username });
-    if (user) return res.status(400).json({ success: false, message: 'Username already exists' });
+    const { username, password, nidNumber, dob, phone } = req.body;
+    if (!username || !password || !nidNumber) {
+      return res.status(400).json({ success: false, message: 'Username, Password and NID Number are required.' });
+    }
 
-    user = new User({ username, password });
+    const nidCheck = isValidBangladeshiNID(nidNumber, dob);
+    if (!nidCheck.valid) {
+      return res.status(400).json({ success: false, message: nidCheck.message });
+    }
+
+    const existingUser = await User.findOne({ username: username.trim() });
+    if (existingUser) {
+      return res.status(400).json({ success: false, message: 'Username already exists' });
+    }
+
+    const existingNid = await User.findOne({ nidNumber: nidCheck.cleaned });
+    if (existingNid) {
+      return res.status(400).json({ success: false, message: 'This NID Card is already registered with another account!' });
+    }
+
+    const user = new User({
+      username: username.trim(),
+      password,
+      nidNumber: nidCheck.cleaned,
+      dob: dob || '',
+      nidVerified: true,
+      phone: phone || ''
+    });
     await user.save();
 
     const token = jwt.sign({ id: user._id, role: 'user' }, JWT_SECRET, { expiresIn: '1d' });
@@ -86,6 +194,9 @@ app.post('/api/auth/user/register', async (req, res) => {
       user: {
         id: user._id,
         username: user.username,
+        nidNumber: user.nidNumber,
+        dob: user.dob,
+        nidVerified: true,
         phone: user.phone || '',
         bloodGroup: user.bloodGroup || '',
         medicalNotes: user.medicalNotes || ''
@@ -99,7 +210,7 @@ app.post('/api/auth/user/register', async (req, res) => {
 app.post('/api/auth/user/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    const user = await User.findOne({ username });
+    const user = await User.findOne({ username: String(username || '').trim() });
     if (!user) return res.status(400).json({ success: false, message: 'Invalid credentials' });
 
     const isMatch = await user.comparePassword(password);
@@ -112,6 +223,9 @@ app.post('/api/auth/user/login', async (req, res) => {
       user: {
         id: user._id,
         username: user.username,
+        nidNumber: user.nidNumber || '',
+        dob: user.dob || '',
+        nidVerified: Boolean(user.nidNumber),
         phone: user.phone || '',
         bloodGroup: user.bloodGroup || '',
         medicalNotes: user.medicalNotes || ''
@@ -124,13 +238,20 @@ app.post('/api/auth/user/login', async (req, res) => {
 
 app.post('/api/auth/user/profile', async (req, res) => {
   try {
-    const { userId, phone, bloodGroup, medicalNotes } = req.body;
+    const { userId, phone, bloodGroup, medicalNotes, nidNumber } = req.body;
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
     if (phone !== undefined) user.phone = phone;
     if (bloodGroup !== undefined) user.bloodGroup = bloodGroup;
     if (medicalNotes !== undefined) user.medicalNotes = medicalNotes;
+    if (nidNumber && !user.nidNumber) {
+      const check = isValidBangladeshiNID(nidNumber);
+      if (check.valid) {
+        user.nidNumber = check.cleaned;
+        user.nidVerified = true;
+      }
+    }
     await user.save();
 
     res.json({
@@ -138,6 +259,8 @@ app.post('/api/auth/user/profile', async (req, res) => {
       user: {
         id: user._id,
         username: user.username,
+        nidNumber: user.nidNumber || '',
+        nidVerified: Boolean(user.nidNumber),
         phone: user.phone || '',
         bloodGroup: user.bloodGroup || '',
         medicalNotes: user.medicalNotes || ''
@@ -263,17 +386,7 @@ io.on('connection', (socket) => {
       const savedEmergency = await Emergency.findOneAndUpdate(
         { emergencyId: data.id },
         {
-          $set: {
-            userId: data.userId || null,
-            emergencyId: data.id,
-            service: data.service,
-            location: data.location,
-            photoUrl: saveBase64Photo(data.photo),
-            photoFrontUrl: saveBase64Photo(data.photoFront),
-            photoBackUrl: saveBase64Photo(data.photoBack),
-            profile: data.profile
-          },
-          $setOnInsert: {
+          $set: { userId: data.userId || null, emergencyId: data.id, service: data.service, location: data.location, photoUrl: saveBase64Photo(data.photo), photoFrontUrl: saveBase64Photo(data.photoFront), photoBackUrl: saveBase64Photo(data.photoBack), profile: data.profile },$setOnInsert: {
             status: 'Pending',
             chatMessages: []
           }

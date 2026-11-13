@@ -4,9 +4,9 @@ import { io } from 'socket.io-client';
 import {
   Plus, Flame, Shield, AlertTriangle, User, LogOut,
   Activity, X, Mic, Video, Send, CheckCircle,
-  MessageSquare, Image, Trash2, Navigation
+  MessageSquare, Image, Trash2, Navigation, ShieldCheck, Radio
 } from 'lucide-react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { Sky3DScene } from '../App';
@@ -27,16 +27,27 @@ const rescueIcon = new L.Icon({
   shadowSize: [41, 41]
 });
 
+const dangerVictimIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
+
 const BACKEND_URL = window.location.hostname === 'localhost'
   ? 'http://localhost:5000'
-  : 'https://smart-sos-system.onrender.com';
+  : '';
 
-const socket = io(BACKEND_URL, {
-  transports: ['polling', 'websocket'],
+const socket = io(BACKEND_URL || window.location.origin, {
+  path: '/socket.io/',
+  transports: ['polling'],
+  upgrade: false,
   reconnection: true,
   reconnectionAttempts: Infinity,
-  reconnectionDelay: 1000,
-  timeout: 20000
+  reconnectionDelay: 1500,
+  timeout: 30000
 });
 
 function calculateDistanceKm(lat1, lon1, lat2, lon2) {
@@ -51,7 +62,7 @@ function calculateDistanceKm(lat1, lon1, lat2, lon2) {
       Math.sin(dLon / 2) *
       Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return (R * c).toFixed(2);
+  return Number((R * c).toFixed(2));
 }
 
 export default function UserApp() {
@@ -62,6 +73,7 @@ export default function UserApp() {
   const [phone, setPhone] = useState('');
   const [bloodGroup, setBloodGroup] = useState('');
   const [medicalNotes, setMedicalNotes] = useState('');
+  const [nidNumber, setNidNumber] = useState('');
 
   const [activeSosId, setActiveSosId] = useState(null);
   const [sosModalOpen, setSosModalOpen] = useState(false);
@@ -73,6 +85,9 @@ export default function UserApp() {
   const [rescueDispatched, setRescueDispatched] = useState(false);
   const [rescueTeamLocation, setRescueTeamLocation] = useState(null);
   const [showMap, setShowMap] = useState(false);
+
+  const [allActiveEmergencies, setAllActiveEmergencies] = useState([]);
+  const [helpingVictimSos, setHelpingVictimSos] = useState(null);
 
   const [voiceBlob, setVoiceBlob] = useState(null);
   const [videoBlob, setVideoBlob] = useState(null);
@@ -91,10 +106,15 @@ export default function UserApp() {
   const chatEndRef = useRef(null);
   const activeSosIdRef = useRef(null);
   const chatOpenRef = useRef(false);
+  const myLocationRef = useRef(null);
 
   useEffect(() => {
     activeSosIdRef.current = activeSosId;
   }, [activeSosId]);
+
+  useEffect(() => {
+    myLocationRef.current = location;
+  }, [location]);
 
   useEffect(() => {
     chatOpenRef.current = chatOpen;
@@ -103,6 +123,13 @@ export default function UserApp() {
       setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     }
   }, [chatOpen]);
+
+  const playNearbyBeep = () => {
+    try {
+      const audio = new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU');
+      audio.play().catch(() => {});
+    } catch (e) {}
+  };
 
   const startLiveGpsTracking = (sosId) => {
     if (!navigator.geolocation) return;
@@ -113,8 +140,11 @@ export default function UserApp() {
       (pos) => {
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         setLocation(coords);
-        if (sosId) {
-          socket.emit('live_location_update', { id: sosId, location: coords });
+        if (sosId || activeSosIdRef.current) {
+          socket.emit('live_location_update', {
+            id: sosId || activeSosIdRef.current,
+            location: coords
+          });
         }
       },
       () => {},
@@ -130,6 +160,8 @@ export default function UserApp() {
   };
 
   useEffect(() => {
+    fetch(`${BACKEND_URL}/api/ping`).catch(() => {});
+
     const storedUser = localStorage.getItem('sos_user');
     if (storedUser) {
       const parsed = JSON.parse(storedUser);
@@ -137,15 +169,11 @@ export default function UserApp() {
       setPhone(parsed.phone || '');
       setBloodGroup(parsed.bloodGroup || '');
       setMedicalNotes(parsed.medicalNotes || '');
+      setNidNumber(parsed.nidNumber || '');
     }
 
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-        () => {},
-        { enableHighAccuracy: true }
-      );
-    }
+    startLiveGpsTracking(null);
+    socket.emit('get_emergencies');
 
     const savedSession = localStorage.getItem('active_sos_session');
     if (savedSession) {
@@ -156,7 +184,6 @@ export default function UserApp() {
           setSelectedService(parsedSession.service || 'All Emergency');
           setRescueDispatched(Boolean(parsedSession.dispatched));
           startLiveGpsTracking(parsedSession.id);
-          socket.emit('get_emergencies');
         }
       } catch (e) {}
     }
@@ -166,14 +193,46 @@ export default function UserApp() {
     }
 
     const handleSyncEmergencies = (list) => {
+      if (!Array.isArray(list)) return;
+      setAllActiveEmergencies(list);
+
       const currentId = activeSosIdRef.current || JSON.parse(localStorage.getItem('active_sos_session') || '{}')?.id;
-      if (!currentId || !Array.isArray(list)) return;
-      const found = list.find((item) => item.id === currentId);
-      if (found) {
-        if (found.status === 'Dispatched') setRescueDispatched(true);
-        if (found.providerLocation) setRescueTeamLocation(found.providerLocation);
-        if (Array.isArray(found.chatMessages)) setChatMessages(found.chatMessages);
+      if (currentId) {
+        const found = list.find((item) => item.id === currentId);
+        if (found) {
+          if (found.status === 'Dispatched') setRescueDispatched(true);
+          if (found.providerLocation) setRescueTeamLocation(found.providerLocation);
+          if (Array.isArray(found.chatMessages)) setChatMessages(found.chatMessages);
+        }
       }
+    };
+
+    const handleNewEmergency = (newSos) => {
+      setAllActiveEmergencies((prev) => {
+        const filtered = prev.filter((item) => item.id !== newSos.id);
+        return [newSos, ...filtered];
+      });
+
+      if (newSos.id !== activeSosIdRef.current && myLocationRef.current && newSos.location?.lat) {
+        const dist = calculateDistanceKm(
+          myLocationRef.current.lat,
+          myLocationRef.current.lng,
+          newSos.location.lat,
+          newSos.location.lng
+        );
+        if (dist !== null && dist <= 1.0) {
+          playNearbyBeep();
+        }
+      }
+    };
+
+    const handleUpdateEmergencyLocation = (data) => {
+      setAllActiveEmergencies((prev) =>
+        prev.map((item) => (item.id === data.id ? { ...item, location: data.location } : item))
+      );
+      setHelpingVictimSos((prev) =>
+        prev && prev.id === data.id ? { ...prev, location: data.location } : prev
+      );
     };
 
     const handleSosAccepted = (data) => {
@@ -207,8 +266,10 @@ export default function UserApp() {
     };
 
     const handleSosDeleted = (data) => {
+      setAllActiveEmergencies((prev) => prev.filter((item) => item.id !== data.id));
+      setHelpingVictimSos((prev) => (prev && prev.id === data.id ? null : prev));
+
       if (data?.id && data.id === activeSosIdRef.current) {
-        stopLiveGpsTracking();
         localStorage.removeItem('active_sos_session');
         setActiveSosId(null);
         setRescueDispatched(false);
@@ -220,6 +281,8 @@ export default function UserApp() {
     };
 
     socket.on('sync_emergencies', handleSyncEmergencies);
+    socket.on('new_emergency', handleNewEmergency);
+    socket.on('update_emergency_location', handleUpdateEmergencyLocation);
     socket.on('sos_accepted', handleSosAccepted);
     socket.on('rescue_team_location', handleRescueLocation);
     socket.on('receive_chat_message', handleReceiveChat);
@@ -227,6 +290,8 @@ export default function UserApp() {
 
     return () => {
       socket.off('sync_emergencies', handleSyncEmergencies);
+      socket.off('new_emergency', handleNewEmergency);
+      socket.off('update_emergency_location', handleUpdateEmergencyLocation);
       socket.off('sos_accepted', handleSosAccepted);
       socket.off('rescue_team_location', handleRescueLocation);
       socket.off('receive_chat_message', handleReceiveChat);
@@ -238,20 +303,20 @@ export default function UserApp() {
   const captureCameraPhoto = async (facingMode = 'user') => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode }
+        video: { facingMode, width: { ideal: 480 }, height: { ideal: 360 } }
       });
       const video = document.createElement('video');
       video.srcObject = stream;
       await video.play();
 
       const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
+      canvas.width = 400;
+      canvas.height = 300;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
       stream.getTracks().forEach((track) => track.stop());
-      return canvas.toDataURL('image/jpeg', 0.7);
+      return canvas.toDataURL('image/jpeg', 0.55);
     } catch (err) {
       return null;
     }
@@ -283,31 +348,46 @@ export default function UserApp() {
       );
     }
 
-    const photoFront = await captureCameraPhoto('user');
-    const photoBack = await captureCameraPhoto('environment');
+    const userProfilePayload = {
+      name: user?.username || 'Citizen',
+      nidNumber: nidNumber || user?.nidNumber || 'Verified Citizen',
+      phone: phone || 'Not Provided',
+      bloodGroup: bloodGroup || 'N/A',
+      medicalNotes: medicalNotes || 'None'
+    };
 
     socket.emit('initial_sos', {
       id: sosId,
       userId: user?.id || null,
       service: serviceName,
       location: currentLoc,
-      photo: photoFront,
-      photoFront,
-      photoBack,
-      profile: {
-        name: user?.username || 'Anonymous User',
-        phone: phone || 'Not Provided',
-        bloodGroup: bloodGroup || 'N/A',
-        medicalNotes: medicalNotes || 'None'
-      }
+      photo: null,
+      photoFront: null,
+      photoBack: null,
+      profile: userProfilePayload
     });
+
+    const photoFront = await captureCameraPhoto('user');
+    const photoBack = await captureCameraPhoto('environment');
+
+    if (photoFront || photoBack) {
+      socket.emit('initial_sos', {
+        id: sosId,
+        userId: user?.id || null,
+        service: serviceName,
+        location: currentLoc,
+        photo: photoFront,
+        photoFront,
+        photoBack,
+        profile: userProfilePayload
+      });
+    }
   };
 
   const handleEndAndDeleteSos = () => {
     if (!activeSosId) return;
     if (window.confirm('Are you sure you want to end this SOS session and disconnect live tracking?')) {
       socket.emit('delete_sos', { id: activeSosId });
-      stopLiveGpsTracking();
       localStorage.removeItem('active_sos_session');
       setActiveSosId(null);
       setRescueDispatched(false);
@@ -324,7 +404,8 @@ export default function UserApp() {
       ...(user || {}),
       phone,
       bloodGroup,
-      medicalNotes
+      medicalNotes,
+      nidNumber
     };
     localStorage.setItem('sos_user', JSON.stringify(updatedLocal));
     setUser(updatedLocal);
@@ -334,11 +415,11 @@ export default function UserApp() {
         const res = await fetch(`${BACKEND_URL}/api/auth/user/profile`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: user.id, phone, bloodGroup, medicalNotes })
+          body: JSON.stringify({ userId: user.id, phone, bloodGroup, medicalNotes, nidNumber })
         });
         const data = await res.json();
         if (data.success) {
-          const mergedUser = { ...data.user, phone: data.user.phone || phone };
+          const mergedUser = { ...data.user, phone: data.user.phone || phone, nidNumber: data.user.nidNumber || nidNumber };
           localStorage.setItem('sos_user', JSON.stringify(mergedUser));
           setUser(mergedUser);
         }
@@ -461,7 +542,7 @@ export default function UserApp() {
       const img = new window.Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const maxDim = 800;
+        const maxDim = 500;
         let w = img.width;
         let h = img.height;
         if (w > maxDim || h > maxDim) {
@@ -477,7 +558,7 @@ export default function UserApp() {
         canvas.height = h;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, w, h);
-        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.72);
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.6);
         socket.emit('send_chat_message', {
           sosId: activeSosId,
           senderName: user?.username || 'Victim',
@@ -503,6 +584,19 @@ export default function UserApp() {
       ? calculateDistanceKm(location.lat, location.lng, rescueTeamLocation.lat, rescueTeamLocation.lng)
       : null;
 
+  const nearbyEmergenciesWithin1Km = allActiveEmergencies
+    .filter((sos) => {
+      if (!sos || sos.id === activeSosId) return false;
+      if (user?.id && sos.userId === user.id) return false;
+      if (!location || !sos.location?.lat || !sos.location?.lng) return false;
+      const d = calculateDistanceKm(location.lat, location.lng, sos.location.lat, sos.location.lng);
+      return d !== null && d <= 1.0;
+    })
+    .map((sos) => ({
+      ...sos,
+      distanceKm: calculateDistanceKm(location.lat, location.lng, sos.location.lat, sos.location.lng)
+    }));
+
   return (
     <div className="water-bg-wrapper">
       <Sky3DScene />
@@ -517,11 +611,21 @@ export default function UserApp() {
           borderBottom: '1.5px solid rgba(0, 102, 255, 0.14)'
         }}>
           <div>
-            <h2 className="title-gradient-3d" style={{ fontSize: '1.5rem' }}>
-              Smart SOS
-            </h2>
-            <span style={{ fontSize: '0.9rem', color: '#0052cc', fontWeight: 800 }}>
-              {user?.username || 'Noman'} {phone && `• ${phone}`}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <h2 className="title-gradient-3d" style={{ fontSize: '1.5rem' }}>
+                Smart SOS
+              </h2>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: '3px',
+                padding: '0.2rem 0.55rem', borderRadius: '999px',
+                background: '#d1fae5', border: '1px solid #34d399',
+                color: '#047857', fontSize: '0.68rem', fontWeight: 800
+              }}>
+                <ShieldCheck size={12} /> NID Verified
+              </span>
+            </div>
+            <span style={{ fontSize: '0.88rem', color: '#0052cc', fontWeight: 800 }}>
+              {user?.username || 'Citizen'} {phone && `• ${phone}`}
             </span>
           </div>
 
@@ -535,8 +639,71 @@ export default function UserApp() {
           </div>
         </div>
 
+        {nearbyEmergenciesWithin1Km.length > 0 && (
+          <div style={{
+            marginBottom: '1rem',
+            padding: '1rem',
+            borderRadius: '22px',
+            background: 'linear-gradient(145deg, #fff1f2, #ffe4e6)',
+            border: '2px solid #f43f5e',
+            boxShadow: '0 12px 25px rgba(225, 29, 72, 0.22)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.55rem', color: '#be123c', fontWeight: 800, fontSize: '0.92rem' }}>
+              <Radio size={18} />
+              <span>NEARBY EMERGENCY WITHIN 1 KM ({nearbyEmergenciesWithin1Km.length})</span>
+            </div>
+
+            {nearbyEmergenciesWithin1Km.map((nearSos) => (
+              <div
+                key={nearSos.id}
+                style={{
+                  padding: '0.75rem',
+                  borderRadius: '14px',
+                  background: '#ffffff',
+                  border: '1.5px solid #fda4af',
+                  marginBottom: '0.5rem',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '0.6rem',
+                  flexWrap: 'wrap'
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 800, color: '#062863', fontSize: '0.9rem' }}>
+                    {nearSos.service || 'Emergency'} • {nearSos.profile?.name || 'Citizen in Danger'}
+                  </div>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 800, color: '#e11d48' }}>
+                    Distance: {nearSos.distanceKm === 0 ? 'Less than 50m away' : `${nearSos.distanceKm} km away`}
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setHelpingVictimSos(nearSos)}
+                  style={{
+                    padding: '0.55rem 0.9rem',
+                    borderRadius: '12px',
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #e11d48 0%, #be123c 100%)',
+                    color: '#ffffff',
+                    fontWeight: 800,
+                    fontSize: '0.78rem',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    boxShadow: '0 6px 14px rgba(225, 29, 72, 0.3)'
+                  }}
+                >
+                  <Navigation size={14} /> Track & Help
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <p style={{ textAlign: 'center', color: '#1e3a8a', fontSize: '0.9rem', marginBottom: '0.5rem', fontWeight: 700 }}>
-          Tap center <strong style={{ color: '#e11d48' }}>SOS Core (Alerts All)</strong> or select a 3D unit:
+          Tap center <strong style={{ color: '#e11d48' }}>SOS Core (Alerts All + 1 KM Users)</strong> or select unit:
         </p>
 
         <div className="cross-hub-stage">
@@ -603,11 +770,11 @@ export default function UserApp() {
                 fontSize: '0.75rem', fontWeight: 800, padding: '0.25rem 0.65rem',
                 borderRadius: '999px', background: '#dbeafe', color: '#0052cc'
               }}>
-                GPS Sharing ON
+                1 KM + GPS Active
               </span>
             </div>
 
-            {liveDistanceKm && (
+            {liveDistanceKm !== null && (
               <div style={{
                 marginBottom: '0.85rem', padding: '0.55rem 0.85rem', borderRadius: '12px',
                 background: '#d1fae5', border: '1.5px solid #34d399', color: '#065f46',
@@ -673,6 +840,82 @@ export default function UserApp() {
         )}
       </div>
 
+      {helpingVictimSos && helpingVictimSos.location && (
+        <div style={{
+          position: 'fixed', inset: 0, backgroundColor: 'rgba(10, 37, 64, 0.88)', zIndex: 3100,
+          display: 'flex', flexDirection: 'column'
+        }}>
+          <div style={{
+            padding: '1rem 1.5rem', display: 'flex', justifyContent: 'space-between',
+            alignItems: 'center', background: '#ffffff', borderBottom: '3px solid #e11d48', flexWrap: 'wrap', gap: '0.8rem'
+          }}>
+            <div>
+              <h3 style={{ color: '#e11d48', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 800 }}>
+                <Radio size={20} /> Helping Nearby Victim ({helpingVictimSos.service})
+              </h3>
+              <span style={{ fontSize: '0.84rem', color: '#062863', fontWeight: 800 }}>
+                Victim: {helpingVictimSos.profile?.name || 'Citizen'} • Distance:{' '}
+                {location
+                  ? `${calculateDistanceKm(location.lat, location.lng, helpingVictimSos.location.lat, helpingVictimSos.location.lng)} km away`
+                  : 'Calculating...'}
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.7rem', alignItems: 'center' }}>
+              <a
+                href={`https://www.google.com/maps/dir/?api=1&destination=${helpingVictimSos.location.lat},${helpingVictimSos.location.lng}`}
+                target="_blank"
+                rel="noreferrer"
+                className="btn-3d-aqua"
+                style={{ width: 'auto', padding: '0.55rem 1rem', fontSize: '0.82rem', textDecoration: 'none' }}
+              >
+                Open Google Maps Directions
+              </a>
+              <button onClick={() => setHelpingVictimSos(null)} style={{ background: 'none', border: 'none', color: '#0a2540', cursor: 'pointer' }}>
+                <X size={26} />
+              </button>
+            </div>
+          </div>
+
+          <div style={{ flex: 1, position: 'relative' }}>
+            <MapContainer
+              center={[helpingVictimSos.location.lat, helpingVictimSos.location.lng]}
+              zoom={16}
+              style={{ height: '100%', width: '100%' }}
+            >
+              <TileLayer
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                attribution="&copy; OpenStreetMap contributors"
+              />
+              <Circle
+                center={[helpingVictimSos.location.lat, helpingVictimSos.location.lng]}
+                radius={1000}
+                pathOptions={{ color: '#e11d48', fillColor: '#fda4af', fillOpacity: 0.18 }}
+              />
+              <Marker position={[helpingVictimSos.location.lat, helpingVictimSos.location.lng]} icon={dangerVictimIcon}>
+                <Popup>Victim Live Location (Needs Help!)</Popup>
+              </Marker>
+              {location && (
+                <Marker position={[location.lat, location.lng]} icon={rescueIcon}>
+                  <Popup>Your Live Position (Helper)</Popup>
+                </Marker>
+              )}
+              {location && (
+                <Polyline
+                  positions={[
+                    [location.lat, location.lng],
+                    [helpingVictimSos.location.lat, helpingVictimSos.location.lng]
+                  ]}
+                  color="#e11d48"
+                  weight={4}
+                  dashArray="6, 6"
+                />
+              )}
+            </MapContainer>
+          </div>
+        </div>
+      )}
+
       {showProfileModal && (
         <div style={{
           position: 'fixed', inset: 0, backgroundColor: 'rgba(10, 37, 64, 0.45)',
@@ -681,39 +924,51 @@ export default function UserApp() {
         }}>
           <div className="glass-3d-shell" style={{ maxWidth: '430px' }}>
             <h2 className="title-gradient-3d" style={{ fontSize: '1.5rem', marginBottom: '1.2rem' }}>
-              Emergency Medical Profile
+              Citizen NID & Medical Profile
             </h2>
 
-            <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.35rem' }}>
+            <label style={{ display: 'block', fontSize: '0.86rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.35rem' }}>
+              Verified Bangladesh NID Number
+            </label>
+            <input
+              className="input-3d"
+              type="text"
+              style={{ marginBottom: '0.9rem' }}
+              value={nidNumber}
+              onChange={(e) => setNidNumber(e.target.value.replace(/\D/g, ''))}
+              placeholder="10, 13, or 17 digit NID"
+            />
+
+            <label style={{ display: 'block', fontSize: '0.86rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.35rem' }}>
               Phone Number (Emergency Contact)
             </label>
             <input
               className="input-3d"
               type="tel"
-              style={{ marginBottom: '1rem' }}
+              style={{ marginBottom: '0.9rem' }}
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               placeholder="e.g. 017XXXXXXXX"
             />
 
-            <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.35rem' }}>
+            <label style={{ display: 'block', fontSize: '0.86rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.35rem' }}>
               Blood Group
             </label>
             <input
               className="input-3d"
-              style={{ marginBottom: '1rem' }}
+              style={{ marginBottom: '0.9rem' }}
               value={bloodGroup}
               onChange={(e) => setBloodGroup(e.target.value)}
               placeholder="e.g. A+, O+, B+, AB-"
             />
 
-            <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.35rem' }}>
+            <label style={{ display: 'block', fontSize: '0.86rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.35rem' }}>
               Medical Report / Conditions
             </label>
             <textarea
               className="input-3d"
               rows={3}
-              style={{ marginBottom: '1.4rem', resize: 'none' }}
+              style={{ marginBottom: '1.3rem', resize: 'none' }}
               value={medicalNotes}
               onChange={(e) => setMedicalNotes(e.target.value)}
               placeholder="Allergies, diabetes, asthma, or medical notes..."
@@ -758,7 +1013,7 @@ export default function UserApp() {
             </div>
 
             <p style={{ fontSize: '0.86rem', color: '#1e3a8a', marginBottom: '0.9rem', fontWeight: 600 }}>
-              Live GPS Location & Camera snapshots are active. You can also record Voice, Video, or text notes below:
+              Providers & nearby users within 1 KM have been alerted with your live GPS! Add optional Voice, Video, or notes:
             </p>
 
             <textarea
@@ -937,12 +1192,12 @@ export default function UserApp() {
           }}>
             <div>
               <h3 style={{ color: '#059669', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 800 }}>
-                <Activity size={20} /> WhatsApp-Style Live Location Map
+                <Activity size={20} /> Live Location Map (1 KM Circle + Rescue Team)
               </h3>
               <span style={{ fontSize: '0.82rem', color: '#0052cc', fontWeight: 700 }}>
-                {liveDistanceKm
+                {liveDistanceKm !== null
                   ? `Blue Pin: You (Live) | Green Pin: Rescue Team (${liveDistanceKm} km away)`
-                  : 'Blue Pin: Your Live Moving GPS Position'}
+                  : 'Blue Pin: Your Live Moving GPS Position (1 KM Community Radar Active)'}
               </span>
             </div>
             <button onClick={() => setShowMap(false)} style={{ background: 'none', border: 'none', color: '#0a2540', cursor: 'pointer' }}>
@@ -965,9 +1220,16 @@ export default function UserApp() {
                 attribution="&copy; OpenStreetMap contributors"
               />
               {location && (
-                <Marker position={[location.lat, location.lng]}>
-                  <Popup>Your Live Location (Moving)</Popup>
-                </Marker>
+                <>
+                  <Circle
+                    center={[location.lat, location.lng]}
+                    radius={1000}
+                    pathOptions={{ color: '#0066ff', fillColor: '#60a5fa', fillOpacity: 0.15 }}
+                  />
+                  <Marker position={[location.lat, location.lng]}>
+                    <Popup>Your Live Location (Moving)</Popup>
+                  </Marker>
+                </>
               )}
               {rescueTeamLocation && (
                 <Marker position={[rescueTeamLocation.lat, rescueTeamLocation.lng]} icon={rescueIcon}>

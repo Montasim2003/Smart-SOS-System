@@ -1,32 +1,63 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, ArrowLeft } from 'lucide-react';
+import { Users, ArrowLeft, ShieldCheck, CreditCard } from 'lucide-react';
 import { Sky3DScene } from '../App';
 
 const API_URL = window.location.hostname === 'localhost'
   ? 'http://localhost:5000'
-  : 'https://smart-sos-system.onrender.com';
+  : '';
 
 export default function UserLogin() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [nidNumber, setNidNumber] = useState('');
+  const [dob, setDob] = useState('');
+  const [phone, setPhone] = useState('');
+  const [nidPhotoName, setNidPhotoName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
+  const isNidFormatValid = /^(?:\d{10}|\d{13}|\d{17})$/.test(nidNumber.trim());
+
+  const handleNidPhotoChange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setNidPhotoName(file.name);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+
+    if (isRegistering) {
+      if (!isNidFormatValid) {
+        setError('Please enter a valid Bangladeshi NID number (10, 13, or 17 digits).');
+        return;
+      }
+      if (dob) {
+        const age = new Date().getFullYear() - new Date(dob).getFullYear();
+        if (age < 12 || age > 110) {
+          setError('Please enter a valid Date of Birth matching your NID.');
+          return;
+        }
+      }
+    }
+
     setLoading(true);
 
     const endpoint = isRegistering ? '/api/auth/user/register' : '/api/auth/user/login';
+    const payload = isRegistering
+      ? { username, password, nidNumber: nidNumber.trim(), dob, phone }
+      : { username, password };
 
     try {
       const res = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
 
@@ -49,52 +80,126 @@ export default function UserLogin() {
     <div className="water-bg-wrapper">
       <Sky3DScene />
 
-      <div className="glass-3d-shell" style={{ maxWidth: '420px' }}>
-        <button className="pill-btn-3d" onClick={() => navigate('/')} style={{ marginBottom: '1.2rem' }}>
+      <div className="glass-3d-shell" style={{ maxWidth: '450px' }}>
+        <button className="pill-btn-3d" onClick={() => navigate('/')} style={{ marginBottom: '1rem' }}>
           <ArrowLeft size={15} /> Back
         </button>
 
-        <div style={{ textAlign: 'center', marginBottom: '1.6rem' }}>
+        <div style={{ textAlign: 'center', marginBottom: '1.4rem' }}>
           <div className="orb-icon-3d">
             <div className="orb-icon-inner">
               <Users size={34} />
             </div>
           </div>
-          <h2 className="title-gradient-3d" style={{ fontSize: '1.75rem' }}>
+          <h2 className="title-gradient-3d" style={{ fontSize: '1.7rem' }}>
             Citizen SOS Portal
           </h2>
-          <p className="subtitle-vivid" style={{ fontSize: '0.92rem', marginTop: '0.3rem' }}>
-            {isRegistering ? 'Create your emergency profile' : 'Sign in for instant 3D SOS access'}
+          <p className="subtitle-vivid" style={{ fontSize: '0.9rem', marginTop: '0.25rem' }}>
+            {isRegistering ? 'Bangladesh NID Verified Registration' : 'Sign in for instant 3D SOS access'}
           </p>
         </div>
 
         {error && (
           <div style={{
-            padding: '0.85rem', marginBottom: '1.2rem', borderRadius: '14px',
+            padding: '0.85rem', marginBottom: '1.1rem', borderRadius: '14px',
             background: 'rgba(225, 29, 72, 0.12)', border: '1.5px solid rgba(225, 29, 72, 0.45)',
-            color: '#be123c', textAlign: 'center', fontSize: '0.88rem', fontWeight: 700
+            color: '#be123c', textAlign: 'center', fontSize: '0.86rem', fontWeight: 700
           }}>
             {error}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
           <div>
-            <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.35rem' }}>
-              Username
+            <label style={{ display: 'block', fontSize: '0.86rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.3rem' }}>
+              Full Name / Username
             </label>
             <input
               className="input-3d"
               type="text"
               required
-              placeholder="Enter your username"
+              placeholder="Enter your name as on NID"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
             />
           </div>
 
+          {isRegistering && (
+            <>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.3rem' }}>
+                  <label style={{ fontSize: '0.86rem', fontWeight: 800, color: '#0b2e59' }}>
+                    Bangladesh NID Number (10 / 13 / 17 Digits)
+                  </label>
+                  {nidNumber && (
+                    <span style={{
+                      fontSize: '0.74rem',
+                      fontWeight: 800,
+                      color: isNidFormatValid ? '#059669' : '#e11d48',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '3px'
+                    }}>
+                      <ShieldCheck size={14} />
+                      {isNidFormatValid ? 'Valid BD NID Format' : 'Invalid Format'}
+                    </span>
+                  )}
+                </div>
+                <input
+                  className="input-3d"
+                  type="text"
+                  inputMode="numeric"
+                  required
+                  placeholder="e.g. 1954829104 or 19992694810294812"
+                  value={nidNumber}
+                  onChange={(e) => setNidNumber(e.target.value.replace(/\D/g, ''))}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.84rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.3rem' }}>
+                    Date of Birth (As on NID)
+                  </label>
+                  <input
+                    className="input-3d"
+                    type="date"
+                    required
+                    value={dob}
+                    onChange={(e) => setDob(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.84rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.3rem' }}>
+                    Mobile Number
+                  </label>
+                  <input
+                    className="input-3d"
+                    type="tel"
+                    required
+                    placeholder="017XXXXXXXX"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.84rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.3rem' }}>
+                  Scan / Upload NID Card Front Photo
+                </label>
+                <label className="pill-btn-3d" style={{ width: '100%', justifyContent: 'center', padding: '0.75rem', cursor: 'pointer' }}>
+                  <CreditCard size={17} color="#0052cc" />
+                  <span>{nidPhotoName ? `NID Card Attached: ${nidPhotoName}` : 'Choose NID Card Image'}</span>
+                  <input type="file" accept="image/*" required onChange={handleNidPhotoChange} style={{ display: 'none' }} />
+                </label>
+              </div>
+            </>
+          )}
+
           <div>
-            <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.35rem' }}>
+            <label style={{ display: 'block', fontSize: '0.86rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.3rem' }}>
               Password
             </label>
             <input
@@ -107,17 +212,17 @@ export default function UserLogin() {
             />
           </div>
 
-          <button type="submit" className="btn-3d-aqua" style={{ marginTop: '0.6rem' }} disabled={loading}>
-            {loading ? 'Please wait...' : isRegistering ? 'Create Account' : 'Sign In'}
+          <button type="submit" className="btn-3d-aqua" style={{ marginTop: '0.5rem' }} disabled={loading}>
+            {loading ? 'Verifying...' : isRegistering ? 'Verify NID & Create Account' : 'Sign In'}
           </button>
         </form>
 
-        <div style={{ textAlign: 'center', marginTop: '1.4rem' }}>
+        <div style={{ textAlign: 'center', marginTop: '1.25rem' }}>
           <button
             onClick={() => { setIsRegistering(!isRegistering); setError(''); }}
-            style={{ background: 'none', border: 'none', color: '#0052cc', cursor: 'pointer', fontWeight: 800, fontSize: '0.92rem' }}
+            style={{ background: 'none', border: 'none', color: '#0052cc', cursor: 'pointer', fontWeight: 800, fontSize: '0.9rem' }}
           >
-            {isRegistering ? 'Already registered? Sign in' : 'New user? Create emergency account'}
+            {isRegistering ? 'Already NID verified? Sign in' : 'New citizen? Verify NID & Create Account'}
           </button>
         </div>
       </div>
