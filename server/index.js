@@ -392,7 +392,7 @@ io.on('connection', (socket) => {
       const savedEmergency = await Emergency.findOneAndUpdate(
         { emergencyId: data.id },
         {
-          $set: { userId: data.userId \vert{}\vert{} null, emergencyId: data.id, service: data.service, location: data.location, photoUrl: saveBase64Photo(data.photo), photoFrontUrl: saveBase64Photo(data.photoFront), photoBackUrl: saveBase64Photo(data.photoBack), profile: data.profile },$setOnInsert: {
+          $set: { userId: data.userId || null, emergencyId: data.id, service: data.service, location: data.location, photoUrl: saveBase64Photo(data.photo), photoFrontUrl: saveBase64Photo(data.photoFront), photoBackUrl: saveBase64Photo(data.photoBack), profile: data.profile },$setOnInsert: {
             status: 'Pending',
             chatMessages: []
           }
