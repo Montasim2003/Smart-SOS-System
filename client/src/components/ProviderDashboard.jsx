@@ -29,7 +29,7 @@ const rescueIcon = new L.Icon({
 
 const API_URL = window.location.hostname === 'localhost'
   ? 'http://localhost:5000'
-  : '';
+  : 'https://smart-sos-system.onrender.com';
 
 const fallbackSocket = io(API_URL || window.location.origin, {
   path: '/socket.io/',

@@ -5,7 +5,7 @@ import { Sky3DScene } from '../App';
 
 const API_URL = window.location.hostname === 'localhost'
   ? 'http://localhost:5000'
-  : '';
+  : 'https://smart-sos-system.onrender.com';
 
 export default function UserLogin() {
   const [isRegistering, setIsRegistering] = useState(false);

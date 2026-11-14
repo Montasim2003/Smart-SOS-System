@@ -38,7 +38,7 @@ const dangerVictimIcon = new L.Icon({
 
 const BACKEND_URL = window.location.hostname === 'localhost'
   ? 'http://localhost:5000'
-  : '';
+  : 'https://smart-sos-system.onrender.com';
 
 const socket = io(BACKEND_URL || window.location.origin, {
   path: '/socket.io/',
