@@ -98,7 +98,7 @@ const rateLimiter = (maxRequests, windowMs) => (req, res, next) => {
 
 app.use('/api/auth', rateLimiter(60, 15 * 60 * 1000));
 
-// Upload Configuration
+// Upload Configuration (Fixed for large mobile photos)
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
@@ -110,28 +110,24 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const safeExt = path.extname(file.originalname).replace(/[^a-zA-Z0-9.]/g, '') || '.webm';
+    const safeExt = path.extname(file.originalname).replace(/[^a-zA-Z0-9.]/g, '') || '.jpg';
     cb(null, file.fieldname + '-' + uniqueSuffix + safeExt);
   }
 });
 
 const fileFilter = (req, file, cb) => {
-  const allowedMimes = [
-    'audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/wav', 'audio/ogg',
-    'video/webm', 'video/mp4', 'video/quicktime',
-    'image/jpeg', 'image/png', 'image/webp'
-  ];
-  if (allowedMimes.some(type => file.mimetype.startsWith(type.split('/')[0]))) {
+  // Allow all standard image, video, and audio formats to prevent crashes
+  if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/') || file.mimetype.startsWith('audio/')) {
     cb(null, true);
   } else {
-    cb(new Error('Invalid file type blocked by security filter'), false);
+    cb(new Error('Invalid file format. Please upload an image.'), false);
   }
 };
 
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 25 * 1024 * 1024 }
+  limits: { fileSize: 50 * 1024 * 1024 } // Increased to 50MB for HD mobile cameras
 });
 
 app.use('/uploads', express.static(uploadDir));
@@ -159,7 +155,7 @@ app.get('/api/ping', (req, res) => {
   res.json({ ok: true });
 });
 
-// NID Registration Route with upload.single('nidPhoto')
+// NID Registration Route
 app.post('/api/auth/user/register', upload.single('nidPhoto'), async (req, res) => {
   try {
     const { username, password, nidNumber, dob, phone } = req.body;
@@ -396,17 +392,7 @@ io.on('connection', (socket) => {
       const savedEmergency = await Emergency.findOneAndUpdate(
         { emergencyId: data.id },
         {
-          $set: {
-            userId: data.userId || null,
-            emergencyId: data.id,
-            service: data.service,
-            location: data.location,
-            photoUrl: saveBase64Photo(data.photo),
-            photoFrontUrl: saveBase64Photo(data.photoFront),
-            photoBackUrl: saveBase64Photo(data.photoBack),
-            profile: data.profile
-          },
-          $setOnInsert: {
+          $set: { userId: data.userId \vert{}\vert{} null, emergencyId: data.id, service: data.service, location: data.location, photoUrl: saveBase64Photo(data.photo), photoFrontUrl: saveBase64Photo(data.photoFront), photoBackUrl: saveBase64Photo(data.photoBack), profile: data.profile },$setOnInsert: {
             status: 'Pending',
             chatMessages: []
           }
@@ -500,6 +486,15 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {});
+});
+
+// Global Error Handler (Prevents crashes and HTML responses from Multer)
+app.use((err, req, res, next) => {
+  console.error("Backend Catch:", err.message);
+  res.status(500).json({ 
+    success: false, 
+    message: err.message || 'Server encountered an error. The file might be too large.' 
+  });
 });
 
 const PORT = process.env.PORT || 5000;

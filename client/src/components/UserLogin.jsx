@@ -83,19 +83,26 @@ export default function UserLogin() {
 
     try {
       const res = await fetch(`${API_URL}${endpoint}`, fetchOptions);
-      const data = await res.json();
-
-      if (data.success) {
-        localStorage.setItem('sos_token', data.token);
-        localStorage.setItem('sos_user', JSON.stringify(data.user));
-        localStorage.setItem('userToken', data.token);
-        localStorage.setItem('userInfo', JSON.stringify(data.user));
-        navigate('/user/app');
+      const contentType = res.headers.get("content-type");
+      
+      // Prevent crashing if server returns HTML error instead of JSON
+      if (contentType && contentType.includes("application/json")) {
+        const data = await res.json();
+        if (data.success) {
+          localStorage.setItem('sos_token', data.token);
+          localStorage.setItem('sos_user', JSON.stringify(data.user));
+          localStorage.setItem('userToken', data.token);
+          localStorage.setItem('userInfo', JSON.stringify(data.user));
+          navigate('/user/app');
+        } else {
+          setError(data.message || 'Authentication failed');
+        }
       } else {
-        setError(data.message || 'Authentication failed');
+        const textMsg = await res.text();
+        setError('Server Error: ' + (textMsg.substring(0, 50) || 'Unknown format'));
       }
     } catch (err) {
-      setError('Server connection failed. Please try again.');
+      setError('Network issue or server is down. Please try again.');
     }
     setLoading(false);
   };
@@ -216,7 +223,6 @@ export default function UserLogin() {
                 <label className="pill-btn-3d" style={{ width: '100%', justifyContent: 'center', padding: '0.75rem', cursor: 'pointer' }}>
                   <CreditCard size={17} color="#0052cc" />
                   <span>{nidPhotoName ? `NID Attached: ${nidPhotoName}` : 'Open Camera for NID'}</span>
-                  {/* capture="environment" সরাসরি ব্যাক ক্যামেরা চালু করবে */}
                   <input type="file" name="nidPhotoFile" accept="image/*" capture="environment" required onChange={handleNidPhotoChange} style={{ display: 'none' }} />
                 </label>
               </div>

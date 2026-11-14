@@ -162,14 +162,17 @@ export default function UserApp() {
   useEffect(() => {
     fetch(`${BACKEND_URL}/api/ping`).catch(() => {});
 
+    // Crash Prevention wrapper added here
     const storedUser = localStorage.getItem('sos_user');
     if (storedUser) {
-      const parsed = JSON.parse(storedUser);
-      setUser(parsed);
-      setPhone(parsed.phone || '');
-      setBloodGroup(parsed.bloodGroup || '');
-      setMedicalNotes(parsed.medicalNotes || '');
-      setNidNumber(parsed.nidNumber || '');
+      try {
+        const parsed = JSON.parse(storedUser);
+        setUser(parsed);
+        setPhone(parsed.phone || '');
+        setBloodGroup(parsed.bloodGroup || '');
+        setMedicalNotes(parsed.medicalNotes || '');
+        setNidNumber(parsed.nidNumber || '');
+      } catch (err) {}
     }
 
     startLiveGpsTracking(null);
@@ -196,15 +199,18 @@ export default function UserApp() {
       if (!Array.isArray(list)) return;
       setAllActiveEmergencies(list);
 
-      const currentId = activeSosIdRef.current || JSON.parse(localStorage.getItem('active_sos_session') || '{}')?.id;
-      if (currentId) {
-        const found = list.find((item) => item.id === currentId);
-        if (found) {
-          if (found.status === 'Dispatched') setRescueDispatched(true);
-          if (found.providerLocation) setRescueTeamLocation(found.providerLocation);
-          if (Array.isArray(found.chatMessages)) setChatMessages(found.chatMessages);
+      try {
+        const currentSession = localStorage.getItem('active_sos_session');
+        const currentId = activeSosIdRef.current || (currentSession ? JSON.parse(currentSession).id : null);
+        if (currentId) {
+          const found = list.find((item) => item.id === currentId);
+          if (found) {
+            if (found.status === 'Dispatched') setRescueDispatched(true);
+            if (found.providerLocation) setRescueTeamLocation(found.providerLocation);
+            if (Array.isArray(found.chatMessages)) setChatMessages(found.chatMessages);
+          }
         }
-      }
+      } catch (e) {}
     };
 
     const handleNewEmergency = (newSos) => {
@@ -238,10 +244,13 @@ export default function UserApp() {
     const handleSosAccepted = (data) => {
       if (!data?.id || data.id === activeSosIdRef.current) {
         setRescueDispatched(true);
-        const saved = JSON.parse(localStorage.getItem('active_sos_session') || '{}');
-        if (saved.id) {
-          localStorage.setItem('active_sos_session', JSON.stringify({ ...saved, dispatched: true }));
-        }
+        try {
+          const saved = localStorage.getItem('active_sos_session');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            localStorage.setItem('active_sos_session', JSON.stringify({ ...parsed, dispatched: true }));
+          }
+        } catch (e) {}
       }
     };
 
