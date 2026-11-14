@@ -9,7 +9,8 @@ const userSchema = new mongoose.Schema({
   nidVerified: { type: Boolean, default: true },
   phone: { type: String, default: '' },
   bloodGroup: { type: String, default: '' },
-  medicalNotes: { type: String, default: '' }
+  medicalNotes: { type: String, default: '' },
+  nidPhotoUrl: { type: String, default: null }
 }, { timestamps: true });
 
 userSchema.pre('save', async function (next) {

@@ -44,21 +44,45 @@ export default function UserLogin() {
           return;
         }
       }
+      if (!nidPhotoName) {
+         setError('Please capture an image of your NID Card.');
+         return;
+      }
     }
 
     setLoading(true);
 
     const endpoint = isRegistering ? '/api/auth/user/register' : '/api/auth/user/login';
-    const payload = isRegistering
-      ? { username, password, nidNumber: nidNumber.trim(), dob, phone }
-      : { username, password };
+    
+    let fetchOptions = {};
 
-    try {
-      const res = await fetch(`${API_URL}${endpoint}`, {
+    if (isRegistering) {
+      const formData = new FormData();
+      formData.append('username', username);
+      formData.append('password', password);
+      formData.append('nidNumber', nidNumber.trim());
+      formData.append('dob', dob);
+      formData.append('phone', phone);
+      
+      const fileInput = document.querySelector('input[name="nidPhotoFile"]');
+      if (fileInput && fileInput.files[0]) {
+         formData.append('nidPhoto', fileInput.files[0]);
+      }
+
+      fetchOptions = {
+        method: 'POST',
+        body: formData
+      };
+    } else {
+      fetchOptions = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+        body: JSON.stringify({ username, password })
+      };
+    }
+
+    try {
+      const res = await fetch(`${API_URL}${endpoint}`, fetchOptions);
       const data = await res.json();
 
       if (data.success) {
@@ -187,12 +211,13 @@ export default function UserLogin() {
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.84rem', fontWeight: 800, color: '#0b2e59', marginBottom: '0.3rem' }}>
-                  Scan / Upload NID Card Front Photo
+                  Capture NID Card Front Photo
                 </label>
                 <label className="pill-btn-3d" style={{ width: '100%', justifyContent: 'center', padding: '0.75rem', cursor: 'pointer' }}>
                   <CreditCard size={17} color="#0052cc" />
-                  <span>{nidPhotoName ? `NID Card Attached: ${nidPhotoName}` : 'Choose NID Card Image'}</span>
-                  <input type="file" accept="image/*" required onChange={handleNidPhotoChange} style={{ display: 'none' }} />
+                  <span>{nidPhotoName ? `NID Attached: ${nidPhotoName}` : 'Open Camera for NID'}</span>
+                  {/* capture="environment" সরাসরি ব্যাক ক্যামেরা চালু করবে */}
+                  <input type="file" name="nidPhotoFile" accept="image/*" capture="environment" required onChange={handleNidPhotoChange} style={{ display: 'none' }} />
                 </label>
               </div>
             </>

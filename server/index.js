@@ -33,6 +33,7 @@ const io = new Server(server, {
   maxHttpBufferSize: 1e7
 });
 
+// Built-in Security Headers
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
@@ -49,6 +50,7 @@ app.use(cors({
 
 app.use(express.json({ limit: '50mb' }));
 
+// NoSQL Injection & XSS Sanitizer
 const sanitizeObject = (obj) => {
   if (!obj || typeof obj !== 'object') return obj;
   for (const key of Object.keys(obj)) {
@@ -72,6 +74,7 @@ app.use((req, res, next) => {
   next();
 });
 
+// Rate Limiter
 const rateLimitMap = new Map();
 const rateLimiter = (maxRequests, windowMs) => (req, res, next) => {
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
@@ -95,6 +98,7 @@ const rateLimiter = (maxRequests, windowMs) => (req, res, next) => {
 
 app.use('/api/auth', rateLimiter(60, 15 * 60 * 1000));
 
+// Upload Configuration
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
@@ -155,9 +159,11 @@ app.get('/api/ping', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/auth/user/register', async (req, res) => {
+// NID Registration Route with upload.single('nidPhoto')
+app.post('/api/auth/user/register', upload.single('nidPhoto'), async (req, res) => {
   try {
     const { username, password, nidNumber, dob, phone } = req.body;
+    
     if (!username || !password || !nidNumber) {
       return res.status(400).json({ success: false, message: 'Username, Password and NID Number are required.' });
     }
@@ -177,13 +183,16 @@ app.post('/api/auth/user/register', async (req, res) => {
       return res.status(400).json({ success: false, message: 'This NID Card is already registered with another account!' });
     }
 
+    const nidPhotoUrl = req.file ? `/uploads/${req.file.filename}` : null;
+
     const user = new User({
       username: username.trim(),
       password,
       nidNumber: nidCheck.cleaned,
       dob: dob || '',
       nidVerified: true,
-      phone: phone || ''
+      phone: phone || '',
+      nidPhotoUrl: nidPhotoUrl 
     });
     await user.save();
 
@@ -199,7 +208,8 @@ app.post('/api/auth/user/register', async (req, res) => {
         nidVerified: true,
         phone: user.phone || '',
         bloodGroup: user.bloodGroup || '',
-        medicalNotes: user.medicalNotes || ''
+        medicalNotes: user.medicalNotes || '',
+        nidPhotoUrl: user.nidPhotoUrl
       }
     });
   } catch (error) {
@@ -386,7 +396,17 @@ io.on('connection', (socket) => {
       const savedEmergency = await Emergency.findOneAndUpdate(
         { emergencyId: data.id },
         {
-          $set: { userId: data.userId || null, emergencyId: data.id, service: data.service, location: data.location, photoUrl: saveBase64Photo(data.photo), photoFrontUrl: saveBase64Photo(data.photoFront), photoBackUrl: saveBase64Photo(data.photoBack), profile: data.profile },$setOnInsert: {
+          $set: {
+            userId: data.userId || null,
+            emergencyId: data.id,
+            service: data.service,
+            location: data.location,
+            photoUrl: saveBase64Photo(data.photo),
+            photoFrontUrl: saveBase64Photo(data.photoFront),
+            photoBackUrl: saveBase64Photo(data.photoBack),
+            profile: data.profile
+          },
+          $setOnInsert: {
             status: 'Pending',
             chatMessages: []
           }
