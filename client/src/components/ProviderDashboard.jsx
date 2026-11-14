@@ -93,7 +93,9 @@ export default function ProviderDashboard({ socket: propSocket }) {
     activeSocket.emit('get_emergencies');
 
     const handleSync = (data) => {
-      setEmergencies(data);
+      // Prevent duplicates during initial sync
+      const uniqueData = Array.from(new Map(data.map(item => [item.id, item])).values());
+      setEmergencies(uniqueData);
     };
 
     const handleNewEmergency = (data) => {
@@ -104,7 +106,16 @@ export default function ProviderDashboard({ socket: propSocket }) {
       ) {
         playAlarm();
       }
-      setEmergencies((prev) => [data, ...prev]);
+      
+      // FIX: Check if this SOS ID already exists to prevent duplicate cards
+      setEmergencies((prev) => {
+        const exists = prev.some(emp => emp.id === data.id);
+        if (exists) {
+          // Update the existing emergency with any new media/data instead of creating a new one
+          return prev.map(emp => emp.id === data.id ? { ...emp, ...data } : emp);
+        }
+        return [data, ...prev];
+      });
     };
 
     const handleUpdateEmergency = (data) => {
