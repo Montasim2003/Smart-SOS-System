@@ -1,5 +1,6 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, useNavigate, Navigate } from 'react-router-dom';
+import { Capacitor } from '@capacitor/core';
 import { Shield, Users, Activity } from 'lucide-react';
 import UserLogin from './components/UserLogin';
 import UserApp from './components/UserApp';
@@ -182,6 +183,21 @@ function LandingPage() {
 }
 
 export default function App() {
+  // phn er apk r jonno
+  if (Capacitor.isNativePlatform()) {
+    return (
+      <Router>
+        <Routes>
+          <Route path="/" element={<Navigate to="/user/login" replace />} />
+          <Route path="/user/login" element={<UserLogin />} />
+          <Route path="/user/app" element={<UserApp />} />
+          <Route path="*" element={<Navigate to="/user/login" replace />} />
+        </Routes>
+      </Router>
+    );
+  }
+
+  // browser e open korar jonno 
   return (
     <Router>
       <Routes>

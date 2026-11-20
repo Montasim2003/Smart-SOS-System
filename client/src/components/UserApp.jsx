@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
+import { Capacitor } from '@capacitor/core';
+import { PushNotifications } from '@capacitor/push-notifications';
 import {
   Plus, Flame, Shield, AlertTriangle, User, LogOut,
   Activity, X, Mic, Video, Send, CheckCircle,
@@ -107,6 +109,9 @@ export default function UserApp() {
   const activeSosIdRef = useRef(null);
   const chatOpenRef = useRef(false);
   const myLocationRef = useRef(null);
+  const userIdRef = useRef(null);
+  const fcmTokenRef = useRef(null);
+  const lastDeviceSyncRef = useRef(0);
 
   useEffect(() => {
     activeSosIdRef.current = activeSosId;
@@ -124,6 +129,25 @@ export default function UserApp() {
     }
   }, [chatOpen]);
 
+  const syncDeviceToBackend = async (uid, token, coords, force = false) => {
+    if (!uid) return;
+    const now = Date.now();
+    if (!force && now - lastDeviceSyncRef.current < 20000) return;
+    lastDeviceSyncRef.current = now;
+
+    try {
+      await fetch(`${BACKEND_URL}/api/user/device-sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: uid,
+          ...(token ? { fcmToken: token } : {}),
+          ...(coords?.lat && coords?.lng ? { lat: coords.lat, lng: coords.lng } : {})
+        })
+      });
+    } catch (e) {}
+  };
+
   const playNearbyBeep = () => {
     try {
       const audio = new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU');
@@ -140,6 +164,9 @@ export default function UserApp() {
       (pos) => {
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         setLocation(coords);
+        if (userIdRef.current) {
+          syncDeviceToBackend(userIdRef.current, fcmTokenRef.current, coords, false);
+        }
         if (sosId || activeSosIdRef.current) {
           socket.emit('live_location_update', {
             id: sosId || activeSosIdRef.current,
@@ -162,17 +189,60 @@ export default function UserApp() {
   useEffect(() => {
     fetch(`${BACKEND_URL}/api/ping`).catch(() => {});
 
-    // Crash Prevention wrapper added here
+    let parsedUser = null;
     const storedUser = localStorage.getItem('sos_user');
     if (storedUser) {
       try {
-        const parsed = JSON.parse(storedUser);
-        setUser(parsed);
-        setPhone(parsed.phone || '');
-        setBloodGroup(parsed.bloodGroup || '');
-        setMedicalNotes(parsed.medicalNotes || '');
-        setNidNumber(parsed.nidNumber || '');
+        parsedUser = JSON.parse(storedUser);
+        userIdRef.current = parsedUser.id;
+        setUser(parsedUser);
+        setPhone(parsedUser.phone || '');
+        setBloodGroup(parsedUser.bloodGroup || '');
+        setMedicalNotes(parsedUser.medicalNotes || '');
+        setNidNumber(parsedUser.nidNumber || '');
       } catch (err) {}
+    }
+
+    // Native Android Push Notification Registration & High-Priority Channel Setup
+    if (Capacitor.isNativePlatform() && parsedUser?.id) {
+      const setupMobilePush = async () => {
+        try {
+          let permStatus = await PushNotifications.checkPermissions();
+          if (permStatus.receive === 'prompt') {
+            permStatus = await PushNotifications.requestPermissions();
+          }
+          if (permStatus.receive !== 'granted') return;
+
+          await PushNotifications.createChannel({
+            id: 'sos_emergency_channel',
+            name: 'Emergency SOS Alerts',
+            description: 'High priority emergency alerts within 1km',
+            importance: 5,
+            visibility: 1,
+            sound: 'default',
+            vibration: true
+          }).catch(() => {});
+
+          await PushNotifications.addListener('registration', (token) => {
+            fcmTokenRef.current = token.value;
+            syncDeviceToBackend(parsedUser.id, token.value, myLocationRef.current, true);
+          });
+
+          await PushNotifications.addListener('pushNotificationReceived', () => {
+            playNearbyBeep();
+            socket.emit('get_emergencies');
+          });
+
+          await PushNotifications.addListener('pushNotificationActionPerformed', () => {
+            socket.emit('get_emergencies');
+          });
+
+          await PushNotifications.register();
+        } catch (err) {
+          console.error('Push notification setup error:', err);
+        }
+      };
+      setupMobilePush();
     }
 
     startLiveGpsTracking(null);
@@ -306,6 +376,9 @@ export default function UserApp() {
       socket.off('receive_chat_message', handleReceiveChat);
       socket.off('sos_deleted', handleSosDeleted);
       stopLiveGpsTracking();
+      if (Capacitor.isNativePlatform()) {
+        PushNotifications.removeAllListeners().catch(() => {});
+      }
     };
   }, []);
 

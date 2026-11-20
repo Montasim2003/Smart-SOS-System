@@ -1,0 +1,14 @@
+{
+  "appId": "com.smartsos.app",
+  "appName": "Smart SOS",
+  "webDir": "dist",
+  "server": {
+    "url": "https://smart-sos-system.vercel.app",
+    "cleartext": true
+  },
+  "plugins": {
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    }
+  }
+}

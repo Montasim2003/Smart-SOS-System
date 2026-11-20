@@ -8,10 +8,47 @@ const path = require('path');
 const fs = require('fs');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
+const admin = require('firebase-admin');
 
 const User = require('./models/User');
 const Provider = require('./models/Provider');
 const Emergency = require('./models/Emergency');
+
+// Firebase Admin Safe Initialization (Local file + Cloud Env Support)
+let firebaseReady = false;
+try {
+  const serviceAccountPath = path.join(__dirname, 'firebase-service-account.json');
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    firebaseReady = true;
+    console.log('Firebase Admin initialized from environment variable.');
+  } else if (fs.existsSync(serviceAccountPath)) {
+    const serviceAccount = require(serviceAccountPath);
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    firebaseReady = true;
+    console.log('Firebase Admin initialized from local JSON file.');
+  } else {
+    console.warn('Warning: firebase-service-account.json not found. Push notifications disabled.');
+  }
+} catch (err) {
+  console.error('Firebase Admin initialization error:', err.message);
+}
+
+// Haversine Formula to calculate distance in Kilometers
+function getDistanceKm(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth radius in km
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) *
+      Math.cos(lat2 * (Math.PI / 180)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -116,7 +153,6 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-  // Allow all standard image, video, and audio formats to prevent crashes
   if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/') || file.mimetype.startsWith('audio/')) {
     cb(null, true);
   } else {
@@ -127,7 +163,7 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 50 * 1024 * 1024 } // Increased to 50MB for HD mobile cameras
+  limits: { fileSize: 50 * 1024 * 1024 }
 });
 
 app.use('/uploads', express.static(uploadDir));
@@ -277,6 +313,25 @@ app.post('/api/auth/user/profile', async (req, res) => {
   }
 });
 
+// Save Mobile FCM Push Token & Latest GPS Coordinates for 1km Radius Alerts
+app.post('/api/user/device-sync', async (req, res) => {
+  try {
+    const { userId, fcmToken, lat, lng } = req.body;
+    if (!userId) return res.status(400).json({ success: false, message: 'userId is required' });
+
+    const updateFields = {};
+    if (fcmToken) updateFields.fcmToken = fcmToken;
+    if (typeof lat === 'number' && typeof lng === 'number') {
+      updateFields.lastLocation = { lat, lng, updatedAt: new Date() };
+    }
+
+    await User.findByIdAndUpdate(userId, { $set: updateFields });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 app.post('/api/auth/provider/register', async (req, res) => {
   try {
     const { serviceName, email, password, serviceType } = req.body;
@@ -392,7 +447,17 @@ io.on('connection', (socket) => {
       const savedEmergency = await Emergency.findOneAndUpdate(
         { emergencyId: data.id },
         {
-          $set: { userId: data.userId || null, emergencyId: data.id, service: data.service, location: data.location, photoUrl: saveBase64Photo(data.photo), photoFrontUrl: saveBase64Photo(data.photoFront), photoBackUrl: saveBase64Photo(data.photoBack), profile: data.profile },$setOnInsert: {
+          $set: {
+            userId: data.userId || null,
+            emergencyId: data.id,
+            service: data.service,
+            location: data.location,
+            photoUrl: saveBase64Photo(data.photo),
+            photoFrontUrl: saveBase64Photo(data.photoFront),
+            photoBackUrl: saveBase64Photo(data.photoBack),
+            profile: data.profile
+          },
+          $setOnInsert: {
             status: 'Pending',
             chatMessages: []
           }
@@ -407,6 +472,57 @@ io.on('connection', (socket) => {
       };
 
       io.emit('new_emergency', sosReport);
+
+      // Send Push Notifications to all users within 1km radius
+      const sosLat = data.location?.lat ?? data.location?.latitude;
+      const sosLng = data.location?.lng ?? data.location?.longitude;
+
+      if (firebaseReady && typeof sosLat === 'number' && typeof sosLng === 'number') {
+        const query = {
+          fcmToken: { $ne: null },
+          'lastLocation.lat': { $ne: null },
+          'lastLocation.lng': { $ne: null }
+        };
+        if (data.userId && mongoose.Types.ObjectId.isValid(data.userId)) {
+          query._id = { $ne: data.userId };
+        }
+
+        const candidates = await User.find(query).select('fcmToken lastLocation').lean();
+        const nearbyTokens = [];
+
+        for (const u of candidates) {
+          const dist = getDistanceKm(sosLat, sosLng, u.lastLocation.lat, u.lastLocation.lng);
+          if (dist <= 1.0 && u.fcmToken) {
+            nearbyTokens.push(u.fcmToken);
+          }
+        }
+
+        if (nearbyTokens.length > 0) {
+          const messagePayload = {
+            notification: {
+              title: `🚨 EMERGENCY SOS (${data.service || 'Alert'})`,
+              body: `Someone within 1km of your location needs immediate help! Tap to view.`
+            },
+            data: {
+              sosId: String(data.id),
+              service: String(data.service || 'Emergency'),
+              lat: String(sosLat),
+              lng: String(sosLng)
+            },
+            android: {
+              priority: 'high',
+              notification: {
+                sound: 'default',
+                channelId: 'sos_emergency_channel'
+              }
+            },
+            tokens: nearbyTokens
+          };
+
+          const response = await admin.messaging().sendEachForMulticast(messagePayload);
+          console.log(`1km SOS Push sent: ${response.successCount} succeeded, ${response.failureCount} failed.`);
+        }
+      }
     } catch (err) {
       console.error('Error saving initial SOS:', err);
     }
@@ -488,7 +604,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {});
 });
 
-// Global Error Handler (Prevents crashes and HTML responses from Multer)
+// Global Error Handler
 app.use((err, req, res, next) => {
   console.error("Backend Catch:", err.message);
   res.status(500).json({ 

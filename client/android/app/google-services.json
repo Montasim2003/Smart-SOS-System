@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1059478466670",
+    "project_id": "smart-sos-50684",
+    "storage_bucket": "smart-sos-50684.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1059478466670:android:5d7e33c15533eee4a0f67f",
+        "android_client_info": {
+          "package_name": "com.smartsos.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBqRSPT-FTJSMx3iok_xDj5T7yEUdZXkPU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
