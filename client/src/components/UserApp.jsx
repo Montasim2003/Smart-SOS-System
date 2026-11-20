@@ -133,7 +133,7 @@ export default function UserApp() {
   const syncDeviceToBackend = async (uid, token, coords, force = false) => {
     if (!uid) return;
     const now = Date.now();
-    if (!force && now - lastDeviceSyncRef.current < 15000) return;
+    if (!force && now - lastDeviceSyncRef.current < 12000) return;
     lastDeviceSyncRef.current = now;
 
     try {
@@ -149,10 +149,28 @@ export default function UserApp() {
     } catch (e) {}
   };
 
+  // Loud 3-Tone Emergency Chime + Vibration when app is open
   const playNearbyBeep = () => {
     try {
-      const audio = new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU');
-      audio.play().catch(() => {});
+      if (navigator.vibrate) {
+        navigator.vibrate([500, 200, 500, 200, 800]);
+      }
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const notes = [880, 1100, 880, 1320];
+      notes.forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, ctx.currentTime + idx * 0.22);
+        gain.gain.setValueAtTime(0.4, ctx.currentTime + idx * 0.22);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + idx * 0.22 + 0.2);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(ctx.currentTime + idx * 0.22);
+        osc.stop(ctx.currentTime + idx * 0.22 + 0.21);
+      });
     } catch (e) {}
   };
 
@@ -171,6 +189,9 @@ export default function UserApp() {
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         setLocation(coords);
         myLocationRef.current = coords;
+        if (userIdRef.current) {
+          syncDeviceToBackend(userIdRef.current, fcmTokenRef.current, coords, true);
+        }
         return coords;
       } else if (navigator.geolocation) {
         return await new Promise((resolve) => {
@@ -179,6 +200,9 @@ export default function UserApp() {
               const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
               setLocation(coords);
               myLocationRef.current = coords;
+              if (userIdRef.current) {
+                syncDeviceToBackend(userIdRef.current, fcmTokenRef.current, coords, true);
+              }
               resolve(coords);
             },
             () => resolve(myLocationRef.current),
@@ -256,12 +280,18 @@ export default function UserApp() {
     if (storedUser) {
       try {
         parsedUser = JSON.parse(storedUser);
-        userIdRef.current = parsedUser.id || parsedUser._id;
+        const uid = parsedUser.id || parsedUser._id;
+        userIdRef.current = uid;
         setUser(parsedUser);
         setPhone(parsedUser.phone || '');
         setBloodGroup(parsedUser.bloodGroup || '');
         setMedicalNotes(parsedUser.medicalNotes || '');
         setNidNumber(parsedUser.nidNumber || '');
+
+        // Start Native Android Foreground Location Service while logged in
+        if (Capacitor.isNativePlatform() && uid && window.AndroidBridge?.startTracking) {
+          window.AndroidBridge.startTracking(String(uid), BACKEND_URL);
+        }
       } catch (err) {}
     } else if (Capacitor.isNativePlatform()) {
       navigate('/user/login', { replace: true });
@@ -351,7 +381,8 @@ export default function UserApp() {
         return [newSos, ...filtered];
       });
 
-      if (newSos.id !== activeSosIdRef.current && myLocationRef.current && newSos.location?.lat) {
+      const uid = userIdRef.current;
+      if (newSos.id !== activeSosIdRef.current && (!uid || newSos.userId !== uid) && myLocationRef.current && newSos.location?.lat) {
         const dist = calculateDistanceKm(
           myLocationRef.current.lat,
           myLocationRef.current.lng,
@@ -713,7 +744,28 @@ export default function UserApp() {
     e.target.value = '';
   };
 
-  const handleLogout = () => {
+  // Complete Logout: Stops Background Service, Clears Server Push Token & Location
+  const handleLogout = async () => {
+    const uid = userIdRef.current || user?.id || user?._id;
+    await stopLiveGpsTracking();
+
+    if (Capacitor.isNativePlatform()) {
+      try {
+        if (window.AndroidBridge?.stopTracking) {
+          window.AndroidBridge.stopTracking();
+        }
+        await PushNotifications.unregister();
+      } catch (e) {}
+    }
+
+    if (uid) {
+      fetch(`${BACKEND_URL}/api/user/device-logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: uid })
+      }).catch(() => {});
+    }
+
     localStorage.removeItem('sos_user');
     localStorage.removeItem('sos_token');
     localStorage.removeItem('active_sos_session');

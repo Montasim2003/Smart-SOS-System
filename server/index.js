@@ -14,7 +14,7 @@ const User = require('./models/User');
 const Provider = require('./models/Provider');
 const Emergency = require('./models/Emergency');
 
-// Firebase Admin Safe Initialization (Local file + Cloud Env Support)
+// Firebase Admin Safe Initialization
 let firebaseReady = false;
 try {
   const serviceAccountPath = path.join(__dirname, 'firebase-service-account.json');
@@ -37,7 +37,7 @@ try {
 
 // Haversine Formula to calculate distance in Kilometers
 function getDistanceKm(lat1, lon1, lat2, lon2) {
-  const R = 6371; // Earth radius in km
+  const R = 6371;
   const dLat = (lat2 - lat1) * (Math.PI / 180);
   const dLon = (lon2 - lon1) * (Math.PI / 180);
   const a =
@@ -70,7 +70,6 @@ const io = new Server(server, {
   maxHttpBufferSize: 1e7
 });
 
-// Built-in Security Headers
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
@@ -87,7 +86,6 @@ app.use(cors({
 
 app.use(express.json({ limit: '50mb' }));
 
-// NoSQL Injection & XSS Sanitizer
 const sanitizeObject = (obj) => {
   if (!obj || typeof obj !== 'object') return obj;
   for (const key of Object.keys(obj)) {
@@ -111,7 +109,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rate Limiter
 const rateLimitMap = new Map();
 const rateLimiter = (maxRequests, windowMs) => (req, res, next) => {
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
@@ -135,7 +132,6 @@ const rateLimiter = (maxRequests, windowMs) => (req, res, next) => {
 
 app.use('/api/auth', rateLimiter(60, 15 * 60 * 1000));
 
-// Upload Configuration (Fixed for large mobile photos)
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
@@ -188,14 +184,12 @@ function isValidBangladeshiNID(nid, dob) {
 }
 
 app.get('/api/ping', (req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, firebaseReady });
 });
 
-// NID Registration Route
 app.post('/api/auth/user/register', upload.single('nidPhoto'), async (req, res) => {
   try {
     const { username, password, nidNumber, dob, phone } = req.body;
-    
     if (!username || !password || !nidNumber) {
       return res.status(400).json({ success: false, message: 'Username, Password and NID Number are required.' });
     }
@@ -224,11 +218,11 @@ app.post('/api/auth/user/register', upload.single('nidPhoto'), async (req, res) 
       dob: dob || '',
       nidVerified: true,
       phone: phone || '',
-      nidPhotoUrl: nidPhotoUrl 
+      nidPhotoUrl: nidPhotoUrl
     });
     await user.save();
 
-    const token = jwt.sign({ id: user._id, role: 'user' }, JWT_SECRET, { expiresIn: '1d' });
+    const token = jwt.sign({ id: user._id, role: 'user' }, JWT_SECRET, { expiresIn: '30d' });
     res.json({
       success: true,
       token,
@@ -258,7 +252,7 @@ app.post('/api/auth/user/login', async (req, res) => {
     const isMatch = await user.comparePassword(password);
     if (!isMatch) return res.status(400).json({ success: false, message: 'Invalid credentials' });
 
-    const token = jwt.sign({ id: user._id, role: 'user' }, JWT_SECRET, { expiresIn: '1d' });
+    const token = jwt.sign({ id: user._id, role: 'user' }, JWT_SECRET, { expiresIn: '30d' });
     res.json({
       success: true,
       token,
@@ -313,11 +307,13 @@ app.post('/api/auth/user/profile', async (req, res) => {
   }
 });
 
-// Save Mobile FCM Push Token & Latest GPS Coordinates for 1km Radius Alerts
+// Save Mobile FCM Push Token & Latest GPS Coordinates while Logged In
 app.post('/api/user/device-sync', async (req, res) => {
   try {
     const { userId, fcmToken, lat, lng } = req.body;
-    if (!userId) return res.status(400).json({ success: false, message: 'userId is required' });
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: 'Valid userId is required' });
+    }
 
     const updateFields = {};
     if (fcmToken) updateFields.fcmToken = fcmToken;
@@ -326,6 +322,24 @@ app.post('/api/user/device-sync', async (req, res) => {
     }
 
     await User.findByIdAndUpdate(userId, { $set: updateFields });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Disconnect Push & Location completely when User Logs Out
+app.post('/api/user/device-logout', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+      await User.findByIdAndUpdate(userId, {
+        $set: {
+          fcmToken: null,
+          lastLocation: { lat: null, lng: null, updatedAt: null }
+        }
+      });
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -341,7 +355,7 @@ app.post('/api/auth/provider/register', async (req, res) => {
     provider = new Provider({ serviceName, email, password, serviceType });
     await provider.save();
 
-    const token = jwt.sign({ id: provider._id, role: 'provider' }, JWT_SECRET, { expiresIn: '1d' });
+    const token = jwt.sign({ id: provider._id, role: 'provider' }, JWT_SECRET, { expiresIn: '7d' });
     res.json({
       success: true,
       token,
@@ -366,7 +380,7 @@ app.post('/api/auth/provider/login', async (req, res) => {
     const isMatch = await provider.comparePassword(password);
     if (!isMatch) return res.status(400).json({ success: false, message: 'Invalid credentials' });
 
-    const token = jwt.sign({ id: provider._id, role: 'provider' }, JWT_SECRET, { expiresIn: '1d' });
+    const token = jwt.sign({ id: provider._id, role: 'provider' }, JWT_SECRET, { expiresIn: '7d' });
     res.json({
       success: true,
       token,
@@ -473,7 +487,7 @@ io.on('connection', (socket) => {
 
       io.emit('new_emergency', sosReport);
 
-      // Send Push Notifications to all users within 1km radius
+      // Send High-Priority Heads-Up Push Notifications to all logged-in users within 1km radius
       const sosLat = data.location?.lat ?? data.location?.latitude;
       const sosLng = data.location?.lng ?? data.location?.longitude;
 
@@ -487,7 +501,7 @@ io.on('connection', (socket) => {
           query._id = { $ne: data.userId };
         }
 
-        const candidates = await User.find(query).select('fcmToken lastLocation').lean();
+        const candidates = await User.find(query).select('fcmToken lastLocation username').lean();
         const nearbyTokens = [];
 
         for (const u of candidates) {
@@ -498,10 +512,11 @@ io.on('connection', (socket) => {
         }
 
         if (nearbyTokens.length > 0) {
+          const victimName = data.profile?.name || 'Someone';
           const messagePayload = {
             notification: {
               title: `🚨 EMERGENCY SOS (${data.service || 'Alert'})`,
-              body: `Someone within 1km of your location needs immediate help! Tap to view.`
+              body: `${victimName} within 1km needs immediate help! Tap to open live map.`
             },
             data: {
               sosId: String(data.id),
@@ -512,8 +527,12 @@ io.on('connection', (socket) => {
             android: {
               priority: 'high',
               notification: {
+                channelId: 'sos_emergency_channel',
                 sound: 'default',
-                channelId: 'sos_emergency_channel'
+                defaultSound: true,
+                defaultVibrateTimings: true,
+                notificationPriority: 'PRIORITY_MAX',
+                visibility: 'PUBLIC'
               }
             },
             tokens: nearbyTokens
@@ -604,7 +623,6 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {});
 });
 
-// Global Error Handler
 app.use((err, req, res, next) => {
   console.error("Backend Catch:", err.message);
   res.status(500).json({ 
