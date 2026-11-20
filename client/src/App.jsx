@@ -8,6 +8,17 @@ import ProviderLogin from './components/ProviderLogin';
 import ProviderDashboard from './components/ProviderDashboard';
 import './App.css';
 
+function isUserLoggedIn() {
+  try {
+    const raw = localStorage.getItem('sos_user');
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    return Boolean(parsed && (parsed.id || parsed._id || parsed.username));
+  } catch (e) {
+    return false;
+  }
+}
+
 export function Sky3DScene() {
   return (
     <div className="sky-scene-container">
@@ -182,27 +193,33 @@ function LandingPage() {
   );
 }
 
+function MobileDefaultRedirect() {
+  return <Navigate to={isUserLoggedIn() ? '/user/app' : '/user/login'} replace />;
+}
+
+function MobileLoginGuard() {
+  return isUserLoggedIn() ? <Navigate to="/user/app" replace /> : <UserLogin />;
+}
+
 export default function App() {
-  // phn er apk r jonno
   if (Capacitor.isNativePlatform()) {
     return (
       <Router>
         <Routes>
-          <Route path="/" element={<Navigate to="/user/login" replace />} />
-          <Route path="/user/login" element={<UserLogin />} />
+          <Route path="/" element={<MobileDefaultRedirect />} />
+          <Route path="/user/login" element={<MobileLoginGuard />} />
           <Route path="/user/app" element={<UserApp />} />
-          <Route path="*" element={<Navigate to="/user/login" replace />} />
+          <Route path="*" element={<MobileDefaultRedirect />} />
         </Routes>
       </Router>
     );
   }
 
-  // browser e open korar jonno 
   return (
     <Router>
       <Routes>
         <Route path="/" element={<LandingPage />} />
-        <Route path="/user/login" element={<UserLogin />} />
+        <Route path="/user/login" element={<MobileLoginGuard />} />
         <Route path="/user/app" element={<UserApp />} />
         <Route path="/provider/login" element={<ProviderLogin />} />
         <Route path="/provider/dashboard" element={<ProviderDashboard />} />

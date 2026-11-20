@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
+import { Geolocation } from '@capacitor/geolocation';
 import {
   Plus, Flame, Shield, AlertTriangle, User, LogOut,
   Activity, X, Mic, Video, Send, CheckCircle,
@@ -132,7 +133,7 @@ export default function UserApp() {
   const syncDeviceToBackend = async (uid, token, coords, force = false) => {
     if (!uid) return;
     const now = Date.now();
-    if (!force && now - lastDeviceSyncRef.current < 20000) return;
+    if (!force && now - lastDeviceSyncRef.current < 15000) return;
     lastDeviceSyncRef.current = now;
 
     try {
@@ -155,35 +156,96 @@ export default function UserApp() {
     } catch (e) {}
   };
 
-  const startLiveGpsTracking = (sosId) => {
-    if (!navigator.geolocation) return;
-    if (watchIdRef.current !== null) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
-    }
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (pos) => {
+  const getAccurateCurrentLocation = async () => {
+    try {
+      if (Capacitor.isNativePlatform()) {
+        const perm = await Geolocation.checkPermissions();
+        if (perm.location !== 'granted') {
+          await Geolocation.requestPermissions();
+        }
+        const pos = await Geolocation.getCurrentPosition({
+          enableHighAccuracy: true,
+          timeout: 8000,
+          maximumAge: 0
+        });
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         setLocation(coords);
-        if (userIdRef.current) {
-          syncDeviceToBackend(userIdRef.current, fcmTokenRef.current, coords, false);
+        myLocationRef.current = coords;
+        return coords;
+      } else if (navigator.geolocation) {
+        return await new Promise((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+              setLocation(coords);
+              myLocationRef.current = coords;
+              resolve(coords);
+            },
+            () => resolve(myLocationRef.current),
+            { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+          );
+        });
+      }
+    } catch (e) {}
+    return myLocationRef.current;
+  };
+
+  const stopLiveGpsTracking = async () => {
+    if (watchIdRef.current !== null) {
+      if (Capacitor.isNativePlatform()) {
+        await Geolocation.clearWatch({ id: watchIdRef.current }).catch(() => {});
+      } else if (navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      }
+      watchIdRef.current = null;
+    }
+  };
+
+  const startLiveGpsTracking = async (sosId) => {
+    await stopLiveGpsTracking();
+
+    const handleCoordsUpdate = (coords) => {
+      setLocation(coords);
+      myLocationRef.current = coords;
+      if (userIdRef.current) {
+        syncDeviceToBackend(userIdRef.current, fcmTokenRef.current, coords, false);
+      }
+      const targetSosId = sosId || activeSosIdRef.current;
+      if (targetSosId) {
+        socket.emit('live_location_update', {
+          id: targetSosId,
+          location: coords
+        });
+      }
+    };
+
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const perm = await Geolocation.checkPermissions();
+        if (perm.location !== 'granted') {
+          await Geolocation.requestPermissions();
         }
-        if (sosId || activeSosIdRef.current) {
-          socket.emit('live_location_update', {
-            id: sosId || activeSosIdRef.current,
-            location: coords
-          });
-        }
+        await getAccurateCurrentLocation();
+        watchIdRef.current = await Geolocation.watchPosition(
+          { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 },
+          (pos) => {
+            if (pos?.coords) {
+              handleCoordsUpdate({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+            }
+          }
+        );
+      } catch (e) {}
+      return;
+    }
+
+    if (!navigator.geolocation) return;
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        handleCoordsUpdate({ lat: pos.coords.latitude, lng: pos.coords.longitude });
       },
       () => {},
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     );
-  };
-
-  const stopLiveGpsTracking = () => {
-    if (watchIdRef.current !== null && navigator.geolocation) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
-      watchIdRef.current = null;
-    }
   };
 
   useEffect(() => {
@@ -194,17 +256,19 @@ export default function UserApp() {
     if (storedUser) {
       try {
         parsedUser = JSON.parse(storedUser);
-        userIdRef.current = parsedUser.id;
+        userIdRef.current = parsedUser.id || parsedUser._id;
         setUser(parsedUser);
         setPhone(parsedUser.phone || '');
         setBloodGroup(parsedUser.bloodGroup || '');
         setMedicalNotes(parsedUser.medicalNotes || '');
         setNidNumber(parsedUser.nidNumber || '');
       } catch (err) {}
+    } else if (Capacitor.isNativePlatform()) {
+      navigate('/user/login', { replace: true });
+      return;
     }
 
-    // Native Android Push Notification Registration & High-Priority Channel Setup
-    if (Capacitor.isNativePlatform() && parsedUser?.id) {
+    if (Capacitor.isNativePlatform() && userIdRef.current) {
       const setupMobilePush = async () => {
         try {
           let permStatus = await PushNotifications.checkPermissions();
@@ -225,7 +289,7 @@ export default function UserApp() {
 
           await PushNotifications.addListener('registration', (token) => {
             fcmTokenRef.current = token.value;
-            syncDeviceToBackend(parsedUser.id, token.value, myLocationRef.current, true);
+            syncDeviceToBackend(userIdRef.current, token.value, myLocationRef.current, true);
           });
 
           await PushNotifications.addListener('pushNotificationReceived', () => {
@@ -238,9 +302,7 @@ export default function UserApp() {
           });
 
           await PushNotifications.register();
-        } catch (err) {
-          console.error('Push notification setup error:', err);
-        }
+        } catch (err) {}
       };
       setupMobilePush();
     }
@@ -384,12 +446,17 @@ export default function UserApp() {
 
   const captureCameraPhoto = async (facingMode = 'user') => {
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return null;
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode, width: { ideal: 480 }, height: { ideal: 360 } }
       });
       const video = document.createElement('video');
       video.srcObject = stream;
+      video.muted = true;
+      video.playsInline = true;
       await video.play();
+
+      await new Promise((r) => setTimeout(r, 350));
 
       const canvas = document.createElement('canvas');
       canvas.width = 400;
@@ -398,7 +465,7 @@ export default function UserApp() {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
       stream.getTracks().forEach((track) => track.stop());
-      return canvas.toDataURL('image/jpeg', 0.55);
+      return canvas.toDataURL('image/jpeg', 0.6);
     } catch (err) {
       return null;
     }
@@ -417,18 +484,8 @@ export default function UserApp() {
 
     startLiveGpsTracking(sosId);
 
-    let currentLoc = location || { lat: 23.8103, lng: 90.4125 };
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          currentLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          setLocation(currentLoc);
-          socket.emit('live_location_update', { id: sosId, location: currentLoc });
-        },
-        () => {},
-        { enableHighAccuracy: true }
-      );
-    }
+    const exactCoords = myLocationRef.current || (await getAccurateCurrentLocation());
+    const currentLoc = exactCoords || { lat: 23.8103, lng: 90.4125 };
 
     const userProfilePayload = {
       name: user?.username || 'Citizen',
@@ -440,7 +497,7 @@ export default function UserApp() {
 
     socket.emit('initial_sos', {
       id: sosId,
-      userId: user?.id || null,
+      userId: user?.id || user?._id || null,
       service: serviceName,
       location: currentLoc,
       photo: null,
@@ -455,10 +512,10 @@ export default function UserApp() {
     if (photoFront || photoBack) {
       socket.emit('initial_sos', {
         id: sosId,
-        userId: user?.id || null,
+        userId: user?.id || user?._id || null,
         service: serviceName,
-        location: currentLoc,
-        photo: photoFront,
+        location: myLocationRef.current || currentLoc,
+        photo: photoFront || photoBack,
         photoFront,
         photoBack,
         profile: userProfilePayload
@@ -493,11 +550,12 @@ export default function UserApp() {
     setUser(updatedLocal);
 
     try {
-      if (user?.id) {
+      const uid = user?.id || user?._id;
+      if (uid) {
         const res = await fetch(`${BACKEND_URL}/api/auth/user/profile`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: user.id, phone, bloodGroup, medicalNotes, nidNumber })
+          body: JSON.stringify({ userId: uid, phone, bloodGroup, medicalNotes, nidNumber })
         });
         const data = await res.json();
         if (data.success) {
@@ -528,7 +586,7 @@ export default function UserApp() {
       mediaRecorderRef.current = recorder;
       setRecordingVoice(true);
     } catch (e) {
-      alert('Microphone permission required!');
+      alert('Please allow Microphone permission in phone Settings -> Apps -> Smart SOS -> Permissions!');
     }
   };
 
@@ -561,7 +619,7 @@ export default function UserApp() {
       recorder.start();
       mediaRecorderRef.current = recorder;
     } catch (e) {
-      alert('Camera & Microphone permission required for video recording!');
+      alert('Please allow Camera & Microphone permissions in phone Settings -> Apps -> Smart SOS -> Permissions!');
       setRecordingVideo(false);
     }
   };
@@ -658,7 +716,8 @@ export default function UserApp() {
   const handleLogout = () => {
     localStorage.removeItem('sos_user');
     localStorage.removeItem('sos_token');
-    navigate('/');
+    localStorage.removeItem('active_sos_session');
+    navigate(Capacitor.isNativePlatform() ? '/user/login' : '/', { replace: true });
   };
 
   const liveDistanceKm =
@@ -669,7 +728,8 @@ export default function UserApp() {
   const nearbyEmergenciesWithin1Km = allActiveEmergencies
     .filter((sos) => {
       if (!sos || sos.id === activeSosId) return false;
-      if (user?.id && sos.userId === user.id) return false;
+      const uid = user?.id || user?._id;
+      if (uid && sos.userId === uid) return false;
       if (!location || !sos.location?.lat || !sos.location?.lng) return false;
       const d = calculateDistanceKm(location.lat, location.lng, sos.location.lat, sos.location.lng);
       return d !== null && d <= 1.0;
